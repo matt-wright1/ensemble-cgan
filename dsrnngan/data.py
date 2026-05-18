@@ -16,9 +16,10 @@ FCST_PATH = data_paths["GENERAL"]["FORECAST_PATH"]
 CONSTANTS_PATH = data_paths["GENERAL"]["CONSTANTS_PATH"]
 NORMALISATION_PATH = data_paths["GENERAL"]["NORMALISATION_PATH"]
 
+#MW: lits of all fields to read in
 all_fcst_fields = ['cape', 'cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp', 'u700', 'v700']
 accumulated_fields = ['cp', 'ssr', 'tp']
-nonnegative_fields = ['cape', 'cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp']
+nonnegative_fields = ['cape', 'cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp'] #MW: things that can't be below 0
 
 HOURS = 6  # 6-hr data
 
@@ -43,6 +44,7 @@ def logprec(y, log_precip=False):
         return y
 
 
+#MW: If changing data source, need to change this function
 def get_dates(year,
               start_hour,
               end_hour):
@@ -102,7 +104,8 @@ def get_dates(year,
 
     return valid_dates
 
-
+#MW: truth = truth data; mask = region of interest (true within region)
+#MW: needs changing if data source changes
 def load_truth_and_mask(date,
                         time_idx,
                         log_precip=False):
@@ -134,7 +137,7 @@ def load_truth_and_mask(date,
     else:
         return y, mask
 
-
+#MW: needs changing if data source changes
 def load_hires_constants(batch_size=1):
     oro_path = os.path.join(CONSTANTS_PATH, "elev.nc")
     df = xr.load_dataset(oro_path)
@@ -179,7 +182,7 @@ def load_fcst_truth_batch(dates_batch,
 
     return np.array(batch_x), np.array(batch_y), np.array(batch_mask)
 
-
+#MW: loads s2s data; needs changing if data source changes
 def load_fcst(field,
               date,
               time_idx,
@@ -338,7 +341,7 @@ def get_fcst_stats_fast(field, year=2018):
     sd = np.std(data, dtype=np.float64)
     return mi, mx, mn, sd
 
-
+#MW: do it once -- for one year -- and save. Can be used very simply.
 def gen_fcst_norm(year=2018):
     '''
     One-off function, used to generate normalisation constants, which

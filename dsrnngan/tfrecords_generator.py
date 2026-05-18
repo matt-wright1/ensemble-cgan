@@ -166,6 +166,8 @@ def write_data(year,
     from data_generator import DataGenerator as DataGeneratorFull
     assert isinstance(year, int)
 
+    #MW to change to Rwanda
+    #MW: ideally related to powers of 2!
     # change this to your forecast image size!
     img_size_h = 384
     img_size_w = 352
@@ -183,8 +185,8 @@ def write_data(year,
     # split TFRecords by lead time, in case this is useful for training on subsets of lead time
     for time_idx in range(28):
         print(f"Doing time index {time_idx}")
-        s_hour = time_idx*HOURS
-        e_hour = (time_idx + 1)*HOURS
+        s_hour = time_idx*HOURS #start hour
+        e_hour = (time_idx + 1)*HOURS #end hour
         dates = get_dates(year,
                           start_hour=s_hour,
                           end_hour=e_hour)

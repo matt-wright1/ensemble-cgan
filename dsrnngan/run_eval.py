@@ -10,7 +10,8 @@ import read_config
 read_config.set_gpu_mode()  # set up whether to use GPU, and mem alloc mode
 
 # input parameters
-log_folder = '/home/c/cooperf/data/cGAN/ICPAC/24h_mk2/logs'; model_numbers = [147200]
+log_folder = '/home/m/matthewwright/cgan_training/rwanda/logs_run1'
+model_numbers = [147200]
 val_years = 2021
 
 model_weights_root = os.path.join(log_folder, "models")
@@ -38,7 +39,7 @@ constant_fields = 2
 num_images = 256
 
 if problem_type == 'normal':
-    input_channels = 4*len(data.all_fcst_fields)
+    input_channels = 2*len(data.all_fcst_fields)
     autocoarsen = False
 elif problem_type == 'autocoarsen':
     input_channels = 1

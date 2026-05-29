@@ -93,7 +93,7 @@ data_paths = read_config.get_data_paths()
 batch_size = 1
 
 weights_fn = os.path.join(log_folder, 'models', f'gen_weights-{model_number:07}.h5')
-dates = get_dates(predict_year, start_hour=0, end_hour=168)
+dates = get_dates(predict_year, start_hour=6, end_hour=6)
 
 assert problem_type == "normal"  # removed autocoarsen from this script
 
@@ -104,8 +104,8 @@ input_channels = 4*len(all_fcst_fields)
 # load appropriate dataset
 data_predict = DataGeneratorFull(dates=dates,
                                  fcst_fields=all_fcst_fields,
-                                 start_hour=0,
-                                 end_hour=168,
+                                 start_hour=6,
+                                 end_hour=6,
                                  batch_size=batch_size,
                                  log_precip=True,
                                  shuffle=True,

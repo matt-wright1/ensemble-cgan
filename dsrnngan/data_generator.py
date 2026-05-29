@@ -14,7 +14,7 @@ class DataGenerator(Sequence):
     DataGenerator(["20180409", "20200607"], fcst_fields=["cape", "tp"], start_hour=12, end_hour=24) will return data over two periods: 12-18 and 18-24 hours for the forecasts initialised on 20180409 and 20200607.
     '''
     def __init__(self, dates, fcst_fields,
-                 start_hour=0, end_hour=168,
+                 start_hour=6, end_hour=6,
                  batch_size=1, log_precip=True,
                  shuffle=True, constants=True, fcst_norm=True,
                  autocoarsen=False, seed=9999):
@@ -42,7 +42,7 @@ class DataGenerator(Sequence):
         assert end_hour <= 168
         assert start_hour % HOURS == 0
         assert end_hour % HOURS == 0
-        assert end_hour > start_hour
+        assert end_hour >= start_hour
         assert autocoarsen is False  # untested, probably not useful in this project
 
         self.fcst_fields = fcst_fields
@@ -67,7 +67,8 @@ class DataGenerator(Sequence):
         temp_dates = np.array(dates)
 
         # represent valid lead-time intervals, 0 = 0-6 hours, 1 = 6-12 hours, 2 = 12-18 hours etc
-        temp_time_idxs = np.arange(start_hour//HOURS, end_hour//HOURS)
+        # temp_time_idxs = np.arange(start_hour//HOURS, end_hour//HOURS)
+        temp_time_idxs = np.array([0])  # There is only one valid time in this set of forecasts
 
         # if no shuffle, the DataGenerator will return each interval from the
         # first date, then each interval from the second date, etc.

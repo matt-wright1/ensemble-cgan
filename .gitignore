@@ -134,3 +134,8 @@ dmypy.json
 
 .DS_Store
 sync*.sh
+
+
+#MW
+nohup_out_files/
+fenwick_cgan/

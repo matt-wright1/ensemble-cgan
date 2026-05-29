@@ -21,7 +21,7 @@ all_fcst_fields = ['cape', 'cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcr
 accumulated_fields = ['cp', 'ssr', 'tp']
 nonnegative_fields = ['cape', 'cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp'] #MW: things that can't be below 0
 
-HOURS = 6  # 6-hr data
+HOURS = 6  #6 hour data
 
 
 # utility function; generator to iterate over a range of dates
@@ -65,7 +65,7 @@ def get_dates(year,
     assert end_hour <= 168
     assert start_hour % HOURS == 0
     assert end_hour % HOURS == 0
-    assert end_hour > start_hour
+    assert end_hour >= start_hour
 
     # Build "cache" of truth data dates/times that exist
     truth_cache = set()
@@ -73,10 +73,9 @@ def get_dates(year,
     end_date = datetime.date(year+1, 1, end_hour//24 + 2)  # go a bit into following year
     for curdate in daterange(start_date, end_date):
         datestr = curdate.strftime('%Y%m%d')
-        for hr in range(0, 24, HOURS):
-            fname = f"{datestr}_{hr:02}"
-            if os.path.exists(os.path.join(TRUTH_PATH, f"{fname}.nc4")):
-                truth_cache.add(fname)
+        fname = f"{datestr}_06" #TO CHECK
+        if os.path.exists(os.path.join(TRUTH_PATH, f"{year}/{fname}.nc")):
+            truth_cache.add(fname)
 
     # Now work out which IFS start dates to use. For each candidate start date,
     # work out which truth dates+times are needed, and check if they exist.
@@ -85,22 +84,18 @@ def get_dates(year,
     valid_dates = []
 
     for curdate in daterange(start_date, end_date):
-        # Check interval by interval.  Not particularly efficient, but almost
-        # certainly not a bottleneck, since we're just repeatedly testing
-        # inclusion in a Python set, and never hitting the disk
-        valid = True
+            valid = True
 
-        for hr in range(start_hour, end_hour, HOURS):
-            # implicitly assumes 00Z forecasts; needs editing for 12Z
-            truth_dt = curdate + datetime.timedelta(hours=hr)
-            # this works for our specific naming convention, where e.g.,
-            # 20190204_06 contains the truth data for hours 06-12 on date 20190204
-            if truth_dt.strftime('%Y%m%d_%H') not in truth_cache:
+            # Convert forecast start date to datetime, otherwise %H becomes 00
+            # fcst_dt = datetime.datetime.combine(curdate, datetime.time(0, 0))
+            truth_fname = curdate.strftime("%Y%m%d_06")
+
+            if truth_fname not in truth_cache:
                 valid = False
                 break
-        if valid:
-            datestr = curdate.strftime('%Y%m%d')
-            valid_dates.append(datestr)
+
+            if valid:
+                valid_dates.append(curdate.strftime("%Y%m%d"))
 
     return valid_dates
 
@@ -118,12 +113,13 @@ def load_truth_and_mask(date,
     '''
     # convert date and time_idx to get the correct truth file
     fcst_date = datetime.datetime.strptime(date, "%Y%m%d")
-    valid_dt = fcst_date + datetime.timedelta(hours=int(time_idx)*HOURS)  # needs to change for 12Z forecasts
+    valid_dt = fcst_date + datetime.timedelta(hours=30)  #MW: changed from HOURS to 6# needs to change for 12Z forecasts
+    year = str(valid_dt.year)
     fname = valid_dt.strftime('%Y%m%d_%H')
-    data_path = os.path.join(TRUTH_PATH, f"{fname}.nc4")
+    data_path = os.path.join(TRUTH_PATH, f"{year}/{fname}.nc")
 
     ds = xr.open_dataset(data_path)
-    da = ds["precipitationCal"]
+    da = ds["precipitation"] #MW: changed from ["precipitationCal"]
     y = da.values
     ds.close()
 
@@ -195,6 +191,7 @@ def load_fcst(field,
         - instantaneous fields: mean and stdev at the start of the interval, mean and stdev at the end of the interval
         - accumulated field: mean and stdev of increment over the interval, and the last two channels are all 0
     '''
+    # print(f"Loading forecast {field} on {date}")
 
     yearstr = date[:4]
     year = int(yearstr)
@@ -213,19 +210,16 @@ def load_fcst(field,
     if field in accumulated_fields:
         # return mean, sd, 0, 0.  zero fields are so that each field returns a 4 x ny x nx array.
         # accumulated fields have been pre-processed s.t. data[:, j, :, :] has accumulation between times j and j+1
-        data1 = all_data_mean[fcst_idx, time_idx, :, :]
-        data2 = all_data_sd[fcst_idx, time_idx, :, :]
-        data3 = np.zeros(data1.shape)
-        data = np.stack([data1, data2, data3, data3], axis=-1)
+        data1 = np.mean(all_data_mean[fcst_idx, 5:9, :, :], axis=0)            # Mean of the accumulations
+        data2 = np.sqrt(np.mean(all_data_sd[fcst_idx, 5:9, :, :]**2, axis=0))  # RMS of the standard deviations
+        data = np.stack([data1, data2], axis=-1)
     else:
-        # return mean_start, sd_start, mean_end, sd_end
-        temp_data_mean = all_data_mean[fcst_idx, time_idx:time_idx+2, :, :]
-        temp_data_sd = all_data_sd[fcst_idx, time_idx:time_idx+2, :, :]
-        data1 = temp_data_mean[0, :, :]
-        data2 = temp_data_sd[0, :, :]
-        data3 = temp_data_mean[1, :, :]
-        data4 = temp_data_sd[1, :, :]
-        data = np.stack([data1, data2, data3, data4], axis=-1)
+        # return mean and std computed using the trapezium rule
+        temp_data_mean = all_data_mean[fcst_idx, 5:10, :, :]
+        temp_data_var = all_data_sd[fcst_idx, 5:10, :, :]**2  # Convert to variances
+        data1 = (temp_data_mean[0, :, :]/2 + np.sum(temp_data_mean[1:4,:,:], axis=0) + temp_data_mean[4,:,:]/2)/4
+        data2 = (temp_data_var[0, :, :]/2 + np.sum(temp_data_var[1:4,:,:], axis=0) + temp_data_var[4,:,:]/2)/4
+        data = np.stack([data1, np.sqrt(data2)], axis=-1)
 
     nc_file.close()
 
@@ -253,7 +247,7 @@ def load_fcst(field,
         elif field in ["sp", "t2m"]:
             # these are bounded well away from zero, so subtract mean from ens mean (but NOT from ens sd!)
             data[:, :, 0] -= fcst_norm[field]["mean"]
-            data[:, :, 2] -= fcst_norm[field]["mean"]
+            # data[:, :, 2] -= fcst_norm[field]["mean"] #TO CHECK
             return data/fcst_norm[field]["std"]
         elif field in nonnegative_fields:
             return data/fcst_norm[field]["max"]
@@ -288,7 +282,7 @@ def get_fcst_stats_slow(field, year=2018):
     These are done via the data loading routines, which is
     slightly inefficient.
     '''
-    dates = get_dates(year, start_hour=0, end_hour=168)
+    dates = get_dates(year, start_hour=6, end_hour=6)
 
     mi = 0.0
     mx = 0.0

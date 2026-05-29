@@ -1,9 +1,9 @@
-AOPP:
+AOPP_MW:
     GENERAL:
-        TRUTH_PATH: '/network/group/aopp/predict/TIP018_HARRIS_TENSORFL/IMERG-regICPAC-6hr'
-        FORECAST_PATH: '/home/c/cooperf/IFS/IFS-regICPAC-meansd'
-        CONSTANTS_PATH: '/network/group/aopp/predict/TIP018_HARRIS_TENSORFL/constants-regICPAC'
-        NORMALISATION_PATH: '/home/c/cooperf/IFS/ICPAC_data/24h_mk2/tfrecords'
+        TRUTH_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/enact_data/enact_for_cgan'
+        FORECAST_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/ifs/enacts_grid' #Maybe change to enact_grid if i want
+        CONSTANTS_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/constants'
+        NORMALISATION_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/tfrecords'
         
     TFRecords:
-        tfrecords_path: '/home/c/cooperf/IFS/ICPAC_data/24h_mk2/tfrecords'
+        tfrecords_path: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/tfrecords'

@@ -1,9 +1,12 @@
 import glob
 import os
 import random
+import math
+from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
+import xarray as xr
 
 import read_config
 from data import all_fcst_fields, denormalise, get_dates, HOURS
@@ -11,12 +14,43 @@ from data import all_fcst_fields, denormalise, get_dates, HOURS
 
 data_paths = read_config.get_data_paths()
 records_folder = data_paths["TFRecords"]["tfrecords_path"]
+truth_folder = Path(data_paths["GENERAL"]["TRUTH_PATH"])
 ds_fac = read_config.read_downscaling_factor()["downscaling_factor"]
 
 CLASSES = 4
-DEFAULT_FCST_SHAPE = (52, 66, 4*len(all_fcst_fields))
-DEFAULT_CON_SHAPE = (52, 66, 2)
-DEFAULT_OUT_SHAPE = (52, 66, 1)
+# Find H/W of image
+# Find the first file anywhere under the directory
+truth_file = next((p for p in truth_folder.rglob("*") if p.is_file()), None)
+
+if truth_file is None:
+    raise FileNotFoundError(f"No files found in {truth_folder}")
+
+with xr.open_dataset(truth_file) as ds:
+    # Handle either lat/lon or latitude/longitude
+    lat_name = "lat" if "lat" in ds.coords else "latitude"
+    lon_name = "lon" if "lon" in ds.coords else "longitude"
+
+    IMAGE_SIZE_H = ds.sizes[lat_name]
+    IMAGE_SIZE_W = ds.sizes[lon_name]
+
+def choose_square_dim(h: int, w: int, close_px: int = 4) -> int:
+    m = min(h, w)
+
+    # Largest power of 2 strictly below m
+    p2 = 1 << (m.bit_length() - 1)
+
+    # Use the power-of-2 size only if it's above 50 and close enough
+    if p2 > 50 and (m - p2) <= close_px:
+        return p2
+
+    return m
+
+S = choose_square_dim(IMAGE_SIZE_H, IMAGE_SIZE_W)
+print(f"Using square image size {S}x{S} for training, from original {IMAGE_SIZE_H}x{IMAGE_SIZE_W}")
+
+DEFAULT_FCST_SHAPE = (S, S, 2*len(all_fcst_fields))
+DEFAULT_CON_SHAPE = (S, S, 2)
+DEFAULT_OUT_SHAPE = (S, S, 1)
 
 
 def DataGenerator(years, batch_size, repeat=True, autocoarsen=False, weights=None):
@@ -162,15 +196,11 @@ def write_data(year,
                img_chunk_width=DEFAULT_FCST_SHAPE[0],  # controls size of subsampled image
                num_class=CLASSES,
                log_precip=True,
-               fcst_norm=True):
+               fcst_norm=True,
+               img_size_h=IMAGE_SIZE_H,
+               img_size_w=IMAGE_SIZE_W):
     from data_generator import DataGenerator as DataGeneratorFull
     assert isinstance(year, int)
-
-    #MW to change to Rwanda
-    #MW: ideally related to powers of 2!
-    # change this to your forecast image size!
-    img_size_h = 52
-    img_size_w = 66
 
     # binning: bin 0 is sample mean rainfall < 0.2mm/hr, bin 1 is 0.2-0.3mm/hr, etc
     bins = [0.2, 0.3, 0.45]

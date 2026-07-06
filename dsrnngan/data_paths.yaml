@@ -1,9 +1,9 @@
 AOPP_MW:
     GENERAL:
         TRUTH_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/enact_data/enact_for_cgan'
-        FORECAST_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/ifs/enacts_grid' #Maybe change to enact_grid if i want
+        FORECAST_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/ifs/enacts_grid'
         CONSTANTS_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/constants'
-        NORMALISATION_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/tfrecords'
+        NORMALISATION_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/tfrecords_no_cape'
         
     TFRecords:
-        tfrecords_path: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/tfrecords'
+        tfrecords_path: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/tfrecords_no_cape'

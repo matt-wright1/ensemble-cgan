@@ -180,6 +180,16 @@ if __name__ == "__main__":
             print(f"Checkpoint {checkpoint}/{num_checkpoints}")
 
             # train for some number of batches
+            print(f'model: {model}')
+            print(f'mode: {mode}')
+            print(f'batch_gen_train: {batch_gen_train}')
+            print(f'data_gen_valid: {data_gen_valid}')
+            print(f'noise_channels: {noise_channels}')
+            print(f'latent_variables: {latent_variables}')
+            print(f'checkpoint: {checkpoint}')
+            print(f'steps_per_checkpoint: {steps_per_checkpoint}')
+            print(f'val_size: {val_size}')
+            print(f'plot_fname: {plot_fname}')
             loss_log = train.train_model(model=model,
                                          mode=mode,
                                          batch_gen_train=batch_gen_train,

@@ -29,8 +29,6 @@ import read_config
 from noise import NoiseGenerator
 from setupmodel import setup_model
 
-
-#Change these forecast dates
 start_date = date(2020, 1, 1)
 end_date   = date(2020, 12, 31)
 log_precip = True
@@ -180,9 +178,33 @@ def create_output_file(nc_out_path):
         chunksizes=(1, 1, len(latitude), len(longitude)),
     )
     netcdf_dict["crps"].units = "mm/h"
-    netcdf_dict["crps"].long_name = "Spatial mean CRPS for precipitation"
+    netcdf_dict["crps"].long_name = "CRPS for precipitation"
 
     return netcdf_dict
+
+def get_crop_slices(forecast_lat, forecast_lon, truth_lat, truth_lon, tol=1e-6):
+    # Find overlapping coordinate range
+    lat_min = max(forecast_lat.min(), truth_lat.min())
+    lat_max = min(forecast_lat.max(), truth_lat.max())
+    lon_min = max(forecast_lon.min(), truth_lon.min())
+    lon_max = min(forecast_lon.max(), truth_lon.max())
+
+    # Handle ascending or descending latitude
+    if forecast_lat[0] < forecast_lat[-1]:
+        f_lat_idx = np.where((forecast_lat >= lat_min - tol) & (forecast_lat <= lat_max + tol))[0]
+    else:
+        f_lat_idx = np.where((forecast_lat <= lat_max + tol) & (forecast_lat >= lat_min - tol))[0]
+
+    f_lon_idx = np.where((forecast_lon >= lon_min - tol) & (forecast_lon <= lon_max + tol))[0]
+
+    if truth_lat[0] < truth_lat[-1]:
+        t_lat_idx = np.where((truth_lat >= lat_min - tol) & (truth_lat <= lat_max + tol))[0]
+    else:
+        t_lat_idx = np.where((truth_lat <= lat_max + tol) & (truth_lat >= lat_min - tol))[0]
+
+    t_lon_idx = np.where((truth_lon >= lon_min - tol) & (truth_lon <= lon_max + tol))[0]
+
+    return f_lat_idx, f_lon_idx, t_lat_idx, t_lon_idx
 
 def iter_dates(start, end):
     current = start
@@ -198,8 +220,13 @@ for d in iter_dates(start_date, end_date):
     with nc.Dataset(file_name, mode="r") as nc_in:
         start_times = nc_in["time"][:]
         valid_times = nc_in["fcst_valid_time"][:]
-        latitude = nc_in["latitude"][:]
-        longitude = nc_in["longitude"][:]
+        fcst_lat = nc_in["latitude"][:]
+        fcst_lon = nc_in["longitude"][:]
+    #Truth file name
+    truth_file_name = os.path.join(truth_input_folder, f"{str(d.year)}/{d.strftime('%Y%m%d')}_06.nc")
+    with nc.Dataset(truth_file_name, mode="r") as nc_truth:
+        latitude = nc_truth["latitude"][:]
+        longitude = nc_truth["longitude"][:]
     # nc_in.close()
 
     # The datetime corresponding to this start time
@@ -210,7 +237,7 @@ for d in iter_dates(start_date, end_date):
     if not save_crps_only:
         nc_out_path = os.path.join(output_folder, f"GAN_fcst_crps_{d.year}{d.month:02d}{d.day:02d}_00Z.nc")
     elif save_crps_only:
-        nc_out_path = os.path.join(output_folder, f"GAN_crps_{d.year}{d.month:02d}{d.day:02d}_00Z.nc")
+        nc_out_path = os.path.join(output_folder, f"GAN_crps_vs_enact_{d.year}{d.month:02d}{d.day:02d}_00Z.nc")
     netcdf_dict = create_output_file(nc_out_path)
 
     # copy across valid_time from input file
@@ -219,7 +246,7 @@ for d in iter_dates(start_date, end_date):
     fcst_idx = d.toordinal() - date(d.year, 1, 1).toordinal()
     netcdf_dict["time_data"][0] = start_times[fcst_idx]
 
-    valid_time_idx = ([int(LEADTIME/HOURS)],) #for 1x24h forecast with lead time LEADTIME
+    valid_time_idx = ([int(LEADTIME/HOURS)],) #for 1x24h forecast with lead time 30h
     valid_times_forecast = valid_times[fcst_idx, valid_time_idx]
     print(np.shape(valid_times_forecast))
     netcdf_dict["valid_time_data"][0,:] = valid_times_forecast
@@ -266,11 +293,19 @@ for d in iter_dates(start_date, end_date):
 
         #load relevant truth data
         truth_data, _ = load_truth_and_mask(d.strftime('%Y%m%d'), 0, log_precip=log_precip, truth_path=truth_input_folder)
+
+        f_lat_idx, f_lon_idx, t_lat_idx, t_lon_idx = get_crop_slices(
+            fcst_lat, fcst_lon, latitude, longitude
+        )
+
+        forecast_crop = ens_cgan_preds_stacked[:, f_lat_idx[:, None], f_lon_idx]
+        truth_crop = truth_data[np.ix_(t_lat_idx, t_lon_idx)]
+        
         print(f"shape truth = {np.shape(truth_data)}")
         print(f"shape ens_cgan_preds_stacked = {np.shape(ens_cgan_preds_stacked)}")
         crps = ps.crps_ensemble(
-            truth_data,
-            ens_cgan_preds_stacked,
+            truth_crop,
+            forecast_crop,
             axis=0
         )
 

@@ -139,3 +139,4 @@ sync*.sh
 #MW
 nohup_out_files/
 fenwick_cgan/
+forecast_date_from_Fenwick.py

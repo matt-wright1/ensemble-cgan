@@ -3,13 +3,14 @@ import os
 import random
 import math
 from pathlib import Path
+import re
 
 import numpy as np
 import tensorflow as tf
 import xarray as xr
 
 import read_config
-from data import all_fcst_fields, denormalise, get_dates, HOURS
+from data import all_fcst_fields, denormalise, get_dates, HOURS, crop_to_bounds, bounds
 
 
 data_paths = read_config.get_data_paths()
@@ -20,21 +21,38 @@ ds_fac = read_config.read_downscaling_factor()["downscaling_factor"]
 CLASSES = 4
 # Find H/W of image
 # Find the first file anywhere under the directory
-truth_file = next((p for p in truth_folder.rglob("*") if p.is_file()), None)
+truth_files = sorted(
+    p
+    for p in truth_folder.rglob("*.nc")
+    if any(re.fullmatch(r"\d{4}", parent.name) for parent in p.parents)
+)
+truth_file = truth_files[0] if truth_files else None
 
 if truth_file is None:
     raise FileNotFoundError(f"No files found in {truth_folder}")
 
 with xr.open_dataset(truth_file) as ds:
     # Handle either lat/lon or latitude/longitude
-    lat_name = "lat" if "lat" in ds.coords else "latitude"
-    lon_name = "lon" if "lon" in ds.coords else "longitude"
+    # if crop_to_bounds and "latitude" in ds.coords:
+    #     lat0, lon0, lat1, lon1 = bounds
+    #     lat_slice = slice(lat0, lat1) if ds.latitude[0] < ds.latitude[-1] else slice(lat1, lat0)
+    #     lon_slice = slice(lon0, lon1) if ds.longitude[0] < ds.longitude[-1] else slice(lon1, lon0)
+    #     ds = ds.sel(latitude=lat_slice, longitude=lon_slice)
+
+    # elif crop_to_bounds and "lat" in ds.coords:
+    #     lat0, lon0, lat1, lon1 = bounds
+    #     lat_slice = slice(lat0, lat1) if ds.lat[0] < ds.lat[-1] else slice(lat1, lat0)
+    #     lon_slice = slice(lon0, lon1) if ds.lon[0] < ds.lon[-1] else slice(lon1, lon0)
+        # ds = ds.sel(lat=lat_slice, lon=lon_slice)
+
+    lat_name = "y"
+    lon_name = "x"
 
     IMAGE_SIZE_H = ds.sizes[lat_name]
     IMAGE_SIZE_W = ds.sizes[lon_name]
 
 def choose_square_dim(h: int, w: int, close_px: int = 4) -> int:
-    m = min(h, w)
+    m = min(h, w, 128)
 
     # Largest power of 2 strictly below m
     p2 = 1 << (m.bit_length() - 1)
@@ -48,10 +66,13 @@ def choose_square_dim(h: int, w: int, close_px: int = 4) -> int:
 S = choose_square_dim(IMAGE_SIZE_H, IMAGE_SIZE_W)
 print(f"Using square image size {S}x{S} for training, from original {IMAGE_SIZE_H}x{IMAGE_SIZE_W}")
 
-DEFAULT_FCST_SHAPE = (S, S, 2*len(all_fcst_fields))
+assert S % ds_fac == 0
+fcst_shape = S // ds_fac
+print(f"S % ds_fac == 0, fcst_shape = {fcst_shape}")
+
+DEFAULT_FCST_SHAPE = (fcst_shape, fcst_shape, 2*len(all_fcst_fields))
 DEFAULT_CON_SHAPE = (S, S, 2)
 DEFAULT_OUT_SHAPE = (S, S, 1)
-
 
 def DataGenerator(years, batch_size, repeat=True, autocoarsen=False, weights=None):
     return create_mixed_dataset(years, batch_size, repeat=repeat, autocoarsen=autocoarsen, weights=weights)
@@ -193,110 +214,441 @@ def _float_feature(list_of_floats):  # float32
 def write_data(year,
                folder=records_folder,
                fcst_fields=all_fcst_fields,
-               img_chunk_width=DEFAULT_FCST_SHAPE[0],  # controls size of subsampled image
                num_class=CLASSES,
                log_precip=True,
-               fcst_norm=True,
-               img_size_h=IMAGE_SIZE_H,
-               img_size_w=IMAGE_SIZE_W):
-    from data_generator import DataGenerator as DataGeneratorFull
-    assert isinstance(year, int)
+               fcst_norm=True):
 
-    # binning: bin 0 is sample mean rainfall < 0.2mm/hr, bin 1 is 0.2-0.3mm/hr, etc
+    from data_generator import DataGenerator as DataGeneratorFull
+
+    year = int(year)
+
+    # Binning based on mean rainfall over the full domain
     bins = [0.2, 0.3, 0.45]
     assert num_class == 4
 
-    scaling_factor = ds_fac
+    def report_nonfinite(name, arr):
+        """
+        Report NaN/+Inf/-Inf values in an array.
+        Returns True if any non-finite values are present.
+        """
+        arr = np.asarray(arr)
 
-    # chosen to approximately cover the full image, but can be changed!
-    nsamples = img_size_h*img_size_w//(img_chunk_width**2)
-    print("Samples per image:", nsamples)  # note, actual samples may be less than this if mask is used to exclude some
+        n_nan = np.isnan(arr).sum()
+        n_posinf = np.isposinf(arr).sum()
+        n_neginf = np.isneginf(arr).sum()
 
-    # split TFRecords by lead time, in case this is useful for training on subsets of lead time
-     # For 24h forecasts only use 1 lead time
-    for time_idx in range(1,2):
-        print(f"Doing time index {time_idx}")
-        s_hour = time_idx*HOURS #start hour
+        if n_nan or n_posinf or n_neginf:
+            print(
+                f"    {name}: shape={arr.shape}, "
+                f"NaN={n_nan}, "
+                f"+Inf={n_posinf}, "
+                f"-Inf={n_neginf}, "
+                f"total={arr.size}"
+            )
+            return True
+
+        return False
+
+    # ------------------------------------------------------------
+    # Lead times
+    # ------------------------------------------------------------
+
+    # Currently just time_idx=1.
+    # Change this range when you want additional lead times.
+    for time_idx in range(1, 2):
+
+        print(f"\nDoing time index {time_idx}")
+
+        s_hour = time_idx * HOURS
         e_hour = s_hour
-        # e_hour = (time_idx + 1)*HOURS #end hour
-        dates = get_dates(year,
-                          start_hour=s_hour,
-                          end_hour=e_hour)
-        dgc = DataGeneratorFull(dates,
-                                fcst_fields=fcst_fields,
-                                start_hour=s_hour,
-                                end_hour=e_hour,
-                                batch_size=1,
-                                log_precip=log_precip,
-                                shuffle=False,
-                                constants=True,
-                                fcst_norm=fcst_norm)
+
+        print(f"start_hour={s_hour}, end_hour={e_hour}")
+
+        dates = get_dates(
+            year,
+            start_hour=s_hour,
+            end_hour=e_hour
+        )
+
+        print(f"Number of dates: {len(dates)}")
+
+        dgc = DataGeneratorFull(
+            dates,
+            fcst_fields=fcst_fields,
+            start_hour=s_hour,
+            end_hour=e_hour,
+            batch_size=1,
+            log_precip=log_precip,
+            shuffle=False,
+            constants=True,
+            fcst_norm=fcst_norm
+        )
+
+        print(f"Generator length: {len(dgc)}")
+
+        # --------------------------------------------------------
+        # Create one TFRecord file for each rainfall class
+        # --------------------------------------------------------
 
         fle_hdles = []
+
         for fh in range(num_class):
-            flename = os.path.join(folder, f"{year}_{time_idx}.{fh}.tfrecords")
-            # compress generated TFRecords, courtesy Fenwick
-            options = tf.io.TFRecordOptions(compression_type="GZIP")
-            fle_hdles.append(tf.io.TFRecordWriter(flename, options=options))
+
+            flename = os.path.join(
+                folder,
+                f"{year}_{time_idx}.{fh}.tfrecords"
+            )
+
+            options = tf.io.TFRecordOptions(
+                compression_type="GZIP"
+            )
+
+            fle_hdles.append(
+                tf.io.TFRecordWriter(
+                    flename,
+                    options=options
+                )
+            )
+
+        # --------------------------------------------------------
+        # Counters
+        # --------------------------------------------------------
+
+        class_counts = np.zeros(num_class, dtype=int)
+
+        skipped_mask = 0
+        skipped_empty = 0
+        skipped_nonfinite = 0
+        skipped_missing_file = 0
+
+        # --------------------------------------------------------
+        # Generator
+        # --------------------------------------------------------
 
         for batch in range(len(dgc)):
-            if (batch % 10) == 0:
-                print(time_idx, batch)
+
+            if batch % 10 == 0:
+                print(f"\ntime_idx={time_idx}, batch={batch}")
 
             try:
                 sample = dgc.__getitem__(batch)
+
             except FileNotFoundError as e:
-                print(f"Skipping batch {batch} because source file is missing: {e}")
+
+                print(
+                    f"Skipping batch {batch} because "
+                    f"source file is missing: {e}"
+                )
+
+                skipped_missing_file += 1
                 continue
 
-            for ii in range(nsamples):
-                # e.g. for image width 94 and img_chunk_width 20, can have 0:20 up to 74:94
-                idh = random.randint(0, img_size_h-img_chunk_width)
-                idw = random.randint(0, img_size_w-img_chunk_width)
+            # ----------------------------------------------------
+            # FULL DOMAIN -- NO SUBSAMPLING
+            # ----------------------------------------------------
 
-                mask = sample[1]['mask'][0,
-                                         idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
-                                         idw*scaling_factor:(idw+img_chunk_width)*scaling_factor].flatten()
-                if np.any(mask):
-                    # some of the truth data is invalid, so don't use this subsample
-                    continue
+            forecast = np.asarray(
+                sample[0]['lo_res_inputs'][0, ...]
+            )
 
-                truth = sample[1]['output'][0,
-                                            idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
-                                            idw*scaling_factor:(idw+img_chunk_width)*scaling_factor].flatten()
-                const = sample[0]['hi_res_inputs'][0,
-                                                   idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
-                                                   idw*scaling_factor:(idw+img_chunk_width)*scaling_factor,
-                                                   :].flatten()
-                forecast = sample[0]['lo_res_inputs'][0,
-                                                      idh:idh+img_chunk_width,
-                                                      idw:idw+img_chunk_width,
-                                                      :].flatten()
-                feature = {
-                    'generator_input': _float_feature(forecast),
-                    'constants': _float_feature(const),
-                    'generator_output': _float_feature(truth)
-                }
-                features = tf.train.Features(feature=feature)
-                example = tf.train.Example(features=features)
-                example_to_string = example.SerializeToString()
+            const = np.asarray(
+                sample[0]['hi_res_inputs'][0, ...]
+            )
 
-                # decide which bin to put this sample in
-                truth_raw = denormalise(truth)  # undo log10(1+x) transformation
-                truth_mean = truth_raw.mean()
-                if truth_mean < bins[0]:
-                    clss = 0
-                elif truth_mean < bins[1]:
-                    clss = 1
-                elif truth_mean < bins[2]:
-                    clss = 2
+            mask = np.asarray(
+                sample[1]['mask']
+            )
+
+            mask = np.squeeze(mask)
+
+            truth = np.asarray(
+                sample[1]['output']
+            )
+
+            truth = np.squeeze(truth)
+
+            nan_pixels = np.isnan(truth)
+
+            print("truth NaNs:", np.count_nonzero(nan_pixels))
+            print("mask True:", np.count_nonzero(mask))
+            print("NaNs covered by mask:", np.count_nonzero(nan_pixels & mask))
+            print("NaNs NOT covered by mask:", np.count_nonzero(nan_pixels & ~mask))
+
+            # ----------------------------------------------------
+            # Print shapes for first batch
+            # ----------------------------------------------------
+
+            if batch == 0:
+
+                print("\nFull-domain shapes:")
+                print("  forecast: ", forecast.shape)
+                print("  constants:", const.shape)
+                print("  truth:    ", truth.shape)
+                print("  mask:     ", mask.shape)
+
+                print("\nExpected flattened sizes:")
+                print("  forecast: ", forecast.size)
+                print("  constants:", const.size)
+                print("  truth:    ", truth.size)
+
+            # ----------------------------------------------------
+            # Empty-array check
+            # ----------------------------------------------------
+
+            if (
+                forecast.size == 0
+                or const.size == 0
+                or truth.size == 0
+            ):
+
+                print(
+                    f"Skipping batch {batch}: empty array"
+                )
+
+                print(
+                    f"    forecast={forecast.shape}, "
+                    f"const={const.shape}, "
+                    f"truth={truth.shape}"
+                )
+
+                skipped_empty += 1
+                continue
+
+            # ----------------------------------------------------
+            # Diagnose NaN / Inf
+            # ----------------------------------------------------
+
+            bad_forecast = report_nonfinite(
+                "forecast",
+                forecast
+            )
+
+            bad_const = report_nonfinite(
+                "constants",
+                const
+            )
+
+            bad_truth = report_nonfinite(
+                "truth",
+                truth
+            )
+
+            # ----------------------------------------------------
+            # If forecast is bad, identify the bad channel(s)
+            # ----------------------------------------------------
+
+            if bad_forecast:
+
+                print(
+                    f"  Batch {batch}: "
+                    "non-finite forecast channels:"
+                )
+
+                for ch in range(forecast.shape[-1]):
+
+                    x = forecast[..., ch]
+
+                    n_bad = np.count_nonzero(
+                        ~np.isfinite(x)
+                    )
+
+                    if n_bad:
+
+                        print(
+                            f"    channel {ch}: "
+                            f"bad={n_bad}/{x.size}, "
+                            f"NaN={np.isnan(x).sum()}, "
+                            f"+Inf={np.isposinf(x).sum()}, "
+                            f"-Inf={np.isneginf(x).sum()}"
+                        )
+
+            # ----------------------------------------------------
+            # More diagnostics for constants
+            # ----------------------------------------------------
+
+            if bad_const and const.ndim >= 3:
+
+                print(
+                    f"  Batch {batch}: "
+                    "non-finite constant channels:"
+                )
+
+                for ch in range(const.shape[-1]):
+
+                    x = const[..., ch]
+
+                    n_bad = np.count_nonzero(
+                        ~np.isfinite(x)
+                    )
+
+                    if n_bad:
+
+                        print(
+                            f"    channel {ch}: "
+                            f"bad={n_bad}/{x.size}, "
+                            f"NaN={np.isnan(x).sum()}, "
+                            f"+Inf={np.isposinf(x).sum()}, "
+                            f"-Inf={np.isneginf(x).sum()}"
+                        )
+
+            # ----------------------------------------------------
+            # Mask check
+            # ----------------------------------------------------
+
+            if mask.shape != truth.shape:
+
+                if (
+                    mask.ndim == truth.ndim - 1
+                    and truth.shape[-1] == 1
+                    and mask.shape == truth.shape[:-1]
+                ):
+                    mask = mask[..., np.newaxis]
+
                 else:
-                    clss = 3
+                    raise ValueError(
+                        f"Mask/truth shape mismatch: "
+                        f"mask={mask.shape}, truth={truth.shape}"
+                    )
 
-                fle_hdles[clss].write(example_to_string)
+            n_masked = np.count_nonzero(mask)
+
+            if n_masked:
+                print(
+                    f"Batch {batch}: "
+                    f"{n_masked}/{mask.size} pixels masked "
+                    f"({100.0 * n_masked / mask.size:.3f}%)"
+                )
+
+            # ----------------------------------------------------
+            # Flatten AFTER all checks
+            # ----------------------------------------------------
+
+            forecast_flat = forecast.flatten()
+            const_flat = const.flatten()
+            truth_flat = truth.flatten()
+
+            # ----------------------------------------------------
+            # Denormalise truth for rainfall classification
+            # ----------------------------------------------------
+
+            truth_raw = denormalise(truth_flat)
+
+            if truth_raw.size == 0:
+
+                print(
+                    f"Skipping batch {batch}: "
+                    "denormalised truth is empty"
+                )
+
+                skipped_empty += 1
+                continue
+
+            truth_mean = np.nanmean(truth_raw)
+
+            if not np.isfinite(truth_mean):
+
+                print(
+                    f"Skipping batch {batch}: "
+                    f"truth_mean={truth_mean}"
+                )
+
+                skipped_nonfinite += 1
+                continue
+
+            # ----------------------------------------------------
+            # Rainfall class
+            # ----------------------------------------------------
+
+            if truth_mean < bins[0]:
+
+                clss = 0
+
+            elif truth_mean < bins[1]:
+
+                clss = 1
+
+            elif truth_mean < bins[2]:
+
+                clss = 2
+
+            else:
+
+                clss = 3
+
+            # ----------------------------------------------------
+            # TFRecord
+            # ----------------------------------------------------
+
+            feature = {
+
+                'generator_input':
+                    _float_feature(forecast_flat),
+
+                'constants':
+                    _float_feature(const_flat),
+
+                'generator_output':
+                    _float_feature(truth_flat)
+            }
+
+            features = tf.train.Features(
+                feature=feature
+            )
+
+            example = tf.train.Example(
+                features=features
+            )
+
+            fle_hdles[clss].write(
+                example.SerializeToString()
+            )
+
+            class_counts[clss] += 1
+
+        # --------------------------------------------------------
+        # Close TFRecord files
+        # --------------------------------------------------------
 
         for fh in fle_hdles:
             fh.close()
+
+        # --------------------------------------------------------
+        # Summary
+        # --------------------------------------------------------
+
+        print("\n" + "=" * 60)
+
+        print(
+            f"Finished year={year}, "
+            f"time_idx={time_idx}"
+        )
+
+        print("\nWritten per class:")
+
+        for clss, count in enumerate(class_counts):
+            print(
+                f"  class {clss}: {count}"
+            )
+
+        print("\nSkipped:")
+
+        print(
+            f"  missing source file: {skipped_missing_file}"
+        )
+
+        print(
+            f"  empty arrays:        {skipped_empty}"
+        )
+
+        print(
+            f"  NaN/Inf:             {skipped_nonfinite}"
+        )
+
+        print(
+            f"  mask:                {skipped_mask}"
+        )
+
+        print("=" * 60)
 
 
 # currently unused; was previously used to make small-image validation dataset,

@@ -24,7 +24,7 @@ import netCDF4 as nc
 import numpy as np
 from tensorflow.keras.utils import Progbar
 
-from data import HOURS, LEADTIME, all_fcst_fields, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm
+from data import HOURS, LEADTIME, all_fcst_fields, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm, crop_to_bounds, bounds
 import read_config
 from noise import NoiseGenerator
 from setupmodel import setup_model
@@ -129,8 +129,8 @@ def create_output_file(nc_out_path):
     rootgrp.description = "GAN 24-hour rainfall ensemble members in the ICPAC region."
 
     # Create output file dimensions
-    rootgrp.createDimension("latitude", len(latitude))
-    rootgrp.createDimension("longitude", len(longitude))
+    rootgrp.createDimension("y", len(y))
+    rootgrp.createDimension("x", len(x))
     rootgrp.createDimension("time", None)
     rootgrp.createDimension("valid_time", None)
 
@@ -138,13 +138,13 @@ def create_output_file(nc_out_path):
         rootgrp.createDimension("member", ensemble_members)
 
     # Create coordinate variables
-    latitude_data = rootgrp.createVariable("latitude", "f4", ("latitude",))
-    latitude_data.units = "degrees_north"
-    latitude_data[:] = latitude
+    y_data = rootgrp.createVariable("y", "f4", ("y",))
+    y_data.units = "degrees_north"
+    y_data[:] = y
 
-    longitude_data = rootgrp.createVariable("longitude", "f4", ("longitude",))
-    longitude_data.units = "degrees_east"
-    longitude_data[:] = longitude
+    x_data = rootgrp.createVariable("x", "f4", ("x",))
+    x_data.units = "degrees_east"
+    x_data[:] = x
 
     if not save_crps_only:
         ensemble_data = rootgrp.createVariable("member", "i4", ("member",))
@@ -164,9 +164,9 @@ def create_output_file(nc_out_path):
         netcdf_dict["precipitation"] = rootgrp.createVariable(
             "precipitation",
             "f4",
-            ("time", "member", "valid_time", "latitude", "longitude"),
+            ("time", "member", "valid_time", "y", "x"),
             compression="zlib",
-            chunksizes=(1, 1, 1, len(latitude), len(longitude)),
+            chunksizes=(1, 1, 1, len(y), len(x)),
         )
         netcdf_dict["precipitation"].units = "mm/h"
         netcdf_dict["precipitation"].long_name = "Precipitation"
@@ -175,9 +175,9 @@ def create_output_file(nc_out_path):
     netcdf_dict["crps"] = rootgrp.createVariable(
         "crps",
         "f4",
-        ("time", "valid_time", "latitude", "longitude"),
+        ("time", "valid_time", "y", "x"),
         compression="zlib",
-        chunksizes=(1, 1, len(latitude), len(longitude)),
+        chunksizes=(1, 1, len(y), len(x)),
     )
     netcdf_dict["crps"].units = "mm/h"
     netcdf_dict["crps"].long_name = "Spatial mean CRPS for precipitation"
@@ -190,16 +190,39 @@ def iter_dates(start, end):
         yield current
         current += timedelta(days=1)
 
+#Open example truth file to get y and x of forecast
+file_name = os.path.join(truth_input_folder, f"nimrod_chenies_1km_{start_date.strftime('%Y%m%d')}")
+with nc.Dataset(file_name, mode="r") as nc_in:
+    y = nc_in["y"][:]
+    x = nc_in["x"][:]
+
 #Iterate through all dates that we want to forecast/CRPS
 for d in iter_dates(start_date, end_date):
-
     # Open input netCDF file to get the times
     file_name = os.path.join(fcst_input_folder, str(d.year), "tp.nc")
     with nc.Dataset(file_name, mode="r") as nc_in:
         start_times = nc_in["time"][:]
         valid_times = nc_in["fcst_valid_time"][:]
-        latitude = nc_in["latitude"][:]
-        longitude = nc_in["longitude"][:]
+
+        # if crop_to_bounds:
+        #     lat_min, lon_min, lat_max, lon_max = bounds
+
+        #     # Boolean masks work whether coordinates are ascending or descending
+        #     lat_mask = (latitude >= lat_min) & (latitude <= lat_max)
+        #     lon_mask = (longitude >= lon_min) & (longitude <= lon_max)
+
+        #     if not lat_mask.any():
+        #         raise ValueError(
+        #             f"No latitude values found within bounds {lat_min} to {lat_max}."
+        #         )
+
+        #     if not lon_mask.any():
+        #         raise ValueError(
+        #             f"No longitude values found within bounds {lon_min} to {lon_max}."
+        #         )
+
+        #     latitude = latitude[lat_mask]
+        #     longitude = longitude[lon_mask]
     # nc_in.close()
 
     # The datetime corresponding to this start time

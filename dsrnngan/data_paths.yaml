@@ -1,9 +1,10 @@
 AOPP_MW:
     GENERAL:
-        TRUTH_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/enact_data/enact_for_cgan'
-        FORECAST_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/ifs/enacts_grid'
-        CONSTANTS_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/constants'
-        NORMALISATION_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/tfrecords_no_cape'
+        TRUTH_PATH: '/network/scratch/matthewwright/chenies_cropped_daily'
+        MASK_PATH: '/network/scratch/matthewwright/chenies_cropped_daily/mask' #Use None if no mask
+        FORECAST_PATH: "/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/ifs/chenies_radar_grid"
+        CONSTANTS_PATH: "/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/nimrod_data/chenies/1km/constants"
+        NORMALISATION_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/UK_chenies/tfrecords'
         
     TFRecords:
-        tfrecords_path: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/tfrecords_no_cape'
+        tfrecords_path: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/UK_chenies/tfrecords'

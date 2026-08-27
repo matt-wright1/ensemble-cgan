@@ -2,7 +2,7 @@ from data import gen_fcst_norm
 import os
 import read_config
 
-years = [2018]
+years = [2018, 2019, 2020, 2021]
 
 def do_normalisations(years):
     data_paths = read_config.get_data_paths()

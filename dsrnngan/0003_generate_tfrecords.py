@@ -6,7 +6,7 @@ import glob
 import os
 import read_config
 
-years = [2018]
+years = [2018, 2019, 2020, 2021]
 
 
 def generate_tfrecords(years):

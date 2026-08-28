@@ -112,7 +112,7 @@ def plot_sequences(gen,
 
         # plot truth
         plt.subplot(gs[kk, 0])
-        plot_img(seq_real[0, :, :], value_range=value_range)
+        plot_img(np.squeeze(seq_real[0]), value_range=value_range)
 
         # plot network input precip field
         plt.subplot(gs[kk, 1])

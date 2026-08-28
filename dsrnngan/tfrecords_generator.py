@@ -520,6 +520,38 @@ def write_data(year,
                 )
 
             # ----------------------------------------------------
+            # Replace invalid masked radar pixels
+            # ----------------------------------------------------
+
+            mask = mask.astype(bool)
+
+            # Find non-finite truth pixels that are NOT masked.
+            # These indicate a problem beyond normal missing radar data.
+            bad_valid_pixels = (~np.isfinite(truth)) & (~mask)
+
+            if np.any(bad_valid_pixels):
+                print(
+                    f"Skipping batch {batch}: "
+                    f"{np.count_nonzero(bad_valid_pixels)} non-finite "
+                    "truth pixels are outside the radar mask"
+                )
+                skipped_nonfinite += 1
+                continue
+
+            # Masked radar pixels may contain NaN.
+            # Do not allow these NaNs into the TFRecord / GAN.
+            truth = truth.copy()
+            truth[mask] = 0.0
+
+            # Final safety check
+            if not np.all(np.isfinite(truth)):
+                print(
+                    f"Skipping batch {batch}: "
+                    "truth still contains NaN/Inf after masking"
+                )
+                skipped_nonfinite += 1
+                continue
+            # ----------------------------------------------------
             # Flatten AFTER all checks
             # ----------------------------------------------------
 

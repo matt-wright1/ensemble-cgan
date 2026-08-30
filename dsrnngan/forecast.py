@@ -31,8 +31,8 @@ from setupmodel import setup_model
 
 
 #Change these forecast dates
-start_date = date(2020, 1, 1)
-end_date   = date(2020, 12, 31)
+start_date = date(2024, 1, 1)
+end_date   = date(2024, 1, 10)
 log_precip = True
 
 # Some setup
@@ -191,7 +191,7 @@ def iter_dates(start, end):
         current += timedelta(days=1)
 
 #Open example truth file to get y and x of forecast
-file_name = os.path.join(truth_input_folder, f"nimrod_chenies_1km_{start_date.strftime('%Y%m%d')}")
+file_name = os.path.join(truth_input_folder, str(start_date.year), f"{start_date.strftime('%Y%m%d')}_06.nc")
 with nc.Dataset(file_name, mode="r") as nc_in:
     y = nc_in["y"][:]
     x = nc_in["x"][:]
@@ -204,29 +204,30 @@ for d in iter_dates(start_date, end_date):
         start_times = nc_in["time"][:]
         valid_times = nc_in["fcst_valid_time"][:]
 
-        # if crop_to_bounds:
-        #     lat_min, lon_min, lat_max, lon_max = bounds
+        time_var = nc_in["time"]
 
-        #     # Boolean masks work whether coordinates are ascending or descending
-        #     lat_mask = (latitude >= lat_min) & (latitude <= lat_max)
-        #     lon_mask = (longitude >= lon_min) & (longitude <= lon_max)
+        start_datetimes = nc.num2date(
+            start_times,
+            units=time_var.units,
+            calendar=getattr(time_var, "calendar", "standard"),
+        )
 
-        #     if not lat_mask.any():
-        #         raise ValueError(
-        #             f"No latitude values found within bounds {lat_min} to {lat_max}."
-        #         )
+    matches = np.array([
+        (t.year == d.year and
+        t.month == d.month and
+        t.day == d.day)
+        for t in start_datetimes
+    ])
 
-        #     if not lon_mask.any():
-        #         raise ValueError(
-        #             f"No longitude values found within bounds {lon_min} to {lon_max}."
-        #         )
+    indices = np.where(matches)[0]
 
-        #     latitude = latitude[lat_mask]
-        #     longitude = longitude[lon_mask]
-    # nc_in.close()
+    if len(indices) == 0:
+        raise ValueError(f"No IFS forecast found for {d}")
 
-    # The datetime corresponding to this start time
-    # d = datetime(1900,1,1) + timedelta(hours=int(start_times[0]))
+    if len(indices) > 1:
+        raise ValueError(f"Multiple IFS forecasts found for {d}")
+
+    fcst_idx = indices[0]
 
     # Create output netCDF file
     pathlib.Path(output_folder).mkdir(parents=True, exist_ok=True)
@@ -236,10 +237,6 @@ for d in iter_dates(start_date, end_date):
         nc_out_path = os.path.join(output_folder, f"GAN_crps_{d.year}{d.month:02d}{d.day:02d}_00Z.nc")
     netcdf_dict = create_output_file(nc_out_path)
 
-    # copy across valid_time from input file
-    # For 7x 24h forecasts with lead times of 6, 30, 54, 78, 102, 126, 150 hours
-    # in_time_idx = ([1,5,9,13,17,21,25],)
-    fcst_idx = d.toordinal() - date(d.year, 1, 1).toordinal()
     netcdf_dict["time_data"][0] = start_times[fcst_idx]
 
     valid_time_idx = ([int(LEADTIME/HOURS)],) #for 1x24h forecast with lead time LEADTIME
@@ -288,14 +285,22 @@ for d in iter_dates(start_date, end_date):
         ens_cgan_preds_stacked = np.stack(ens_cgan_preds, axis=0)
 
         #load relevant truth data
-        truth_data, _ = load_truth_and_mask(d.strftime('%Y%m%d'), 0, log_precip=log_precip, truth_path=truth_input_folder)
+        truth_data, mask = load_truth_and_mask(d.strftime('%Y%m%d'), 0, log_precip=log_precip, truth_path=truth_input_folder)
+        truth_data = np.squeeze(truth_data, axis=0)
         print(f"shape truth = {np.shape(truth_data)}")
         print(f"shape ens_cgan_preds_stacked = {np.shape(ens_cgan_preds_stacked)}")
+
+        truth_for_crps = truth_data.copy()
+        truth_for_crps[mask] = np.nan
         crps = ps.crps_ensemble(
-            truth_data,
+            truth_for_crps,
             ens_cgan_preds_stacked,
             axis=0
         )
+
+        print("NaNs in truth_data:", np.isnan(truth_data).sum())
+        print("NaNs in truth_for_crps:", np.isnan(truth_for_crps).sum())
+        print("NaNs in crps:", np.isnan(crps).sum())
 
         netcdf_dict["crps"][0, valid_time_num, :, :] = crps
 

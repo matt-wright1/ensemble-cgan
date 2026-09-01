@@ -271,12 +271,55 @@ def load_fcst(field,
             lat_slice = slice(lat_idx[0], lat_idx[-1] + 1)
             lon_slice = slice(lon_idx[0], lon_idx[-1] + 1)
 
-    # calculate first index (i.e., day of year, with Jan 1 = 0)
-    fcst_date = datetime.datetime.strptime(date, "%Y%m%d").date()
-    fcst_idx = fcst_date.toordinal() - datetime.date(year, 1, 1).toordinal()
+    # Find forecast index from the actual time coordinate rather than
+    time_var = nc_file["time"]
+    start_times = time_var[:]
 
-    lead_idx1 = int(LEADTIME/HOURS)
-    lead_idx2 = int(lead_idx1 + 4) if field in accumulated_fields else int(lead_idx1 + 5)
+    start_datetimes = nc.num2date(
+        start_times,
+        units=time_var.units,
+        calendar=getattr(time_var, "calendar", "standard")
+    )
+
+    target_date = datetime.datetime.strptime(date, "%Y%m%d").date()
+
+    matches = np.array([
+        (t.year == target_date.year and
+        t.month == target_date.month and
+        t.day == target_date.day)
+        for t in start_datetimes
+    ])
+
+    indices = np.where(matches)[0]
+
+    if len(indices) == 0:
+        nc_file.close()
+        raise ValueError(
+            f"No {field} forecast found for {date} in {ds_path}"
+        )
+
+    if len(indices) > 1:
+        nc_file.close()
+        raise ValueError(
+            f"Multiple {field} forecasts found for {date} in {ds_path}"
+        )
+
+    fcst_idx = indices[0]
+
+    lead_idx1 = int(LEADTIME / HOURS)
+    lead_idx2 = (
+        lead_idx1 + 4
+        if field in accumulated_fields
+        else lead_idx1 + 5
+    )
+
+    if lead_idx2 > all_data_mean.shape[1]:
+        nc_file.close()
+        raise ValueError(
+            f"Insufficient lead times for {field} on {date}: "
+            f"need indices {lead_idx1}:{lead_idx2}, "
+            f"but lead-time dimension has size {all_data_mean.shape[1]}"
+        )
 
     if field in accumulated_fields:
         # return mean, sd, 0, 0.  zero fields are so that each field returns a 4 x ny x nx array.

@@ -31,7 +31,7 @@ from setupmodel import setup_model
 
 
 #Change these forecast dates
-start_date = date(2023, 6, 1)
+start_date = date(2023, 7, 20)
 end_date   = date(2024, 5, 31)
 log_precip = True
 
@@ -190,9 +190,28 @@ def iter_dates(start, end):
         yield current
         current += timedelta(days=1)
 
-#Open example truth file to get y and x of forecast
-file_name = os.path.join(truth_input_folder, str(start_date.year), f"{start_date.strftime('%Y%m%d')}_06.nc")
-with nc.Dataset(file_name, mode="r") as nc_in:
+## Open first available truth file to get y and x of forecast
+example_truth_file = None
+
+for d_tmp in iter_dates(start_date, end_date):
+    candidate = os.path.join(
+        truth_input_folder,
+        str(d_tmp.year),
+        f"{d_tmp.strftime('%Y%m%d')}_06.nc"
+    )
+
+    if os.path.exists(candidate):
+        example_truth_file = candidate
+        break
+
+if example_truth_file is None:
+    raise FileNotFoundError(
+        f"No truth files found between {start_date} and {end_date}"
+    )
+
+print(f"Using truth file for grid: {example_truth_file}")
+
+with nc.Dataset(example_truth_file, mode="r") as nc_in:
     y = nc_in["y"][:]
     x = nc_in["x"][:]
 
@@ -284,14 +303,31 @@ for d in iter_dates(start_date, end_date):
 
         ens_cgan_preds_stacked = np.stack(ens_cgan_preds, axis=0)
 
-        #load relevant truth data
-        truth_data, mask = load_truth_and_mask(d.strftime('%Y%m%d'), 0, log_precip=log_precip, truth_path=truth_input_folder)
+    # Truth corresponds to forecast valid date, not forecast start date
+    valid_dt = datetime.combine(d, datetime.min.time()) + timedelta(hours=LEADTIME)
+
+    truth_file = os.path.join(
+        truth_input_folder,
+        str(valid_dt.year),
+        f"{valid_dt.strftime('%Y%m%d')}_06.nc"
+    )
+
+    if os.path.exists(truth_file):
+        truth_data, mask = load_truth_and_mask(
+            d.strftime('%Y%m%d'),
+            0,
+            log_precip=log_precip,
+            truth_path=truth_input_folder
+        )
+
         truth_data = np.squeeze(truth_data, axis=0)
+
         print(f"shape truth = {np.shape(truth_data)}")
         print(f"shape ens_cgan_preds_stacked = {np.shape(ens_cgan_preds_stacked)}")
 
         truth_for_crps = truth_data.copy()
         truth_for_crps[mask] = np.nan
+
         crps = ps.crps_ensemble(
             truth_for_crps,
             ens_cgan_preds_stacked,
@@ -302,7 +338,20 @@ for d in iter_dates(start_date, end_date):
         print("NaNs in truth_for_crps:", np.isnan(truth_for_crps).sum())
         print("NaNs in crps:", np.isnan(crps).sum())
 
-        netcdf_dict["crps"][0, valid_time_num, :, :] = crps
+    else:
+        print(
+            f"WARNING: No truth for forecast {d}; "
+            f"valid date is {valid_dt.date()}: {truth_file}"
+        )
+        print("Setting CRPS to NaN and continuing.")
+
+        crps = np.full(
+            ens_cgan_preds_stacked.shape[1:],
+            np.nan,
+            dtype=np.float32
+        )
+
+    netcdf_dict["crps"][0, valid_time_num, :, :] = crps
 
     print("network_fcst_input finite:", np.isfinite(network_fcst_input).all())
     print("gan_prediction finite:", np.isfinite(gan_prediction).all())

@@ -71,23 +71,35 @@ fcst_shape = S // ds_fac
 print(f"S % ds_fac == 0, fcst_shape = {fcst_shape}")
 
 DEFAULT_FCST_SHAPE = (fcst_shape, fcst_shape, 2*len(all_fcst_fields))
-DEFAULT_CON_SHAPE = (S, S, 2)
 DEFAULT_OUT_SHAPE = (S, S, 1)
 
-def DataGenerator(years, batch_size, repeat=True, autocoarsen=False, weights=None):
-    return create_mixed_dataset(years, batch_size, repeat=repeat, autocoarsen=autocoarsen, weights=weights)
+def DataGenerator(years, batch_size, repeat=True, autocoarsen=False, weights=None, constant_fields=None):
+    if constant_fields is None:
+        raise ValueError("constant_fields must be provided")
+
+    con_shape = (S, S, constant_fields)
+
+    return create_mixed_dataset(
+        years,
+        batch_size,
+        repeat=repeat,
+        autocoarsen=autocoarsen,
+        weights=weights,
+        con_shape=con_shape
+    )
 
 
 def create_mixed_dataset(years,
                          batch_size,
                          fcst_shape=DEFAULT_FCST_SHAPE,
-                         con_shape=DEFAULT_CON_SHAPE,
+                         con_shape=None,
                          out_shape=DEFAULT_OUT_SHAPE,
                          repeat=True,
                          autocoarsen=False,
                          folder=records_folder,
                          shuffle_size=64,
-                         weights=None):
+                         weights=None,
+    ):
 
     if weights is None:
         weights = [1./CLASSES]*CLASSES
@@ -124,7 +136,7 @@ def _dataset_autocoarsener(inputs, outputs):
 
 def _parse_batch(record_batch,
                  insize=DEFAULT_FCST_SHAPE,
-                 consize=DEFAULT_CON_SHAPE,
+                 consize=None,
                  outsize=DEFAULT_OUT_SHAPE):
     # Create a description of the features
     feature_description = {
@@ -143,7 +155,7 @@ def _parse_batch(record_batch,
 def create_dataset(years,
                    clss,
                    fcst_shape=DEFAULT_FCST_SHAPE,
-                   con_shape=DEFAULT_CON_SHAPE,
+                   con_shape=None,
                    out_shape=DEFAULT_OUT_SHAPE,
                    folder=records_folder,
                    shuffle_size=64,
@@ -184,7 +196,7 @@ def create_fixed_dataset(year=None,
                          batch_size=16,
                          autocoarsen=False,
                          fcst_shape=DEFAULT_FCST_SHAPE,
-                         con_shape=DEFAULT_CON_SHAPE,
+                         con_shape=None,
                          out_shape=DEFAULT_OUT_SHAPE,
                          name=None,
                          folder=records_folder):
@@ -216,9 +228,13 @@ def write_data(year,
                fcst_fields=all_fcst_fields,
                num_class=CLASSES,
                log_precip=True,
-               fcst_norm=True):
+               fcst_norm=True,
+               constants_list=None):
 
     from data_generator import DataGenerator as DataGeneratorFull
+
+    if constants_list is None:
+        constants_list = []
 
     year = int(year)
 
@@ -280,8 +296,8 @@ def write_data(year,
             batch_size=1,
             log_precip=log_precip,
             shuffle=False,
-            constants=True,
-            fcst_norm=fcst_norm
+            fcst_norm=fcst_norm,
+            constants_list=constants_list
         )
 
         print(f"Generator length: {len(dgc)}")

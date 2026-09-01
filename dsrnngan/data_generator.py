@@ -40,7 +40,7 @@ class DataGenerator(Sequence):
         batch_size=1,
         log_precip=True,
         shuffle=True,
-        constants=True,
+        constants_list=None,
         fcst_norm=True,
         autocoarsen=False,
         seed=9999,
@@ -66,8 +66,8 @@ class DataGenerator(Sequence):
                 Whether to apply log10(1+x) transform to precip-related fields
             shuffle (bool):
                 Whether to shuffle data
-            constants (bool):
-                Whether to return orography/LSM fields
+            constants_list (list of strings):
+                The list of high-resolution constant fields to be used
             fcst_norm (bool):
                 Whether to apply normalisation to fields to make O(1)
             autocoarsen (bool):
@@ -107,8 +107,11 @@ class DataGenerator(Sequence):
         # High-resolution constants
         # ----------------------------------------------------
 
-        if constants:
-            self.constants = load_hires_constants(self.batch_size)
+        if constants_list is not None:
+            self.constants = load_hires_constants(
+                batch_size=self.batch_size,
+                constants_list=constants_list
+                )
         else:
             self.constants = None
 
@@ -336,7 +339,7 @@ class DataGenerator(Sequence):
         # Return model inputs / outputs
         # ----------------------------------------------------
 
-        if self.constants is None:
+        if self.constants_list is None:
 
             return (
                 {

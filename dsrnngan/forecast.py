@@ -24,14 +24,14 @@ import netCDF4 as nc
 import numpy as np
 from tensorflow.keras.utils import Progbar
 
-from data import HOURS, LEADTIME, all_fcst_fields, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm, crop_to_bounds, bounds
+from data import HOURS, LEADTIME, all_fcst_fields, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm, crop_to_bounds, bounds, ForecastDataUnavailable
 import read_config
 from noise import NoiseGenerator
 from setupmodel import setup_model
 
 
 #Change these forecast dates
-start_date = date(2023, 7, 20)
+start_date = date(2024, 1, 1)
 end_date   = date(2024, 5, 31)
 log_precip = True
 
@@ -217,153 +217,350 @@ with nc.Dataset(example_truth_file, mode="r") as nc_in:
 
 #Iterate through all dates that we want to forecast/CRPS
 for d in iter_dates(start_date, end_date):
-    # Open input netCDF file to get the times
-    file_name = os.path.join(fcst_input_folder, str(d.year), "tp.nc")
+
+    print(f"\n{'='*70}")
+    print(f"Processing forecast date: {d}")
+    print(f"{'='*70}")
+
+    # ------------------------------------------------------------------
+    # 1. Find this forecast date in the IFS file
+    # ------------------------------------------------------------------
+    file_name = os.path.join(
+        fcst_input_folder,
+        str(d.year),
+        "tp.nc"
+    )
+
     with nc.Dataset(file_name, mode="r") as nc_in:
+
         start_times = nc_in["time"][:]
         valid_times = nc_in["fcst_valid_time"][:]
 
         time_var = nc_in["time"]
 
-        start_datetimes = nc.num2date(
-            start_times,
-            units=time_var.units,
-            calendar=getattr(time_var, "calendar", "standard"),
+        # Only convert valid/unmasked time entries
+        valid_indices = np.where(~np.ma.getmaskarray(start_times))[0]
+
+        matching_indices = []
+
+        for idx in valid_indices:
+
+            t = nc.num2date(
+                start_times[idx],
+                units=time_var.units,
+                calendar=getattr(time_var, "calendar", "standard")
+            )
+
+            if (
+                t.year == d.year
+                and t.month == d.month
+                and t.day == d.day
+            ):
+                matching_indices.append(idx)
+
+    # No valid IFS initialisation for this date
+    if len(matching_indices) == 0:
+        print(
+            f"WARNING: No valid IFS forecast found for {d}. "
+            f"Skipping date."
+        )
+        continue
+
+    if len(matching_indices) > 1:
+        raise ValueError(
+            f"Multiple IFS forecasts found for {d}: "
+            f"indices {matching_indices}"
         )
 
-    matches = np.array([
-        (t.year == d.year and
-        t.month == d.month and
-        t.day == d.day)
-        for t in start_datetimes
-    ])
+    fcst_idx = matching_indices[0]
 
-    indices = np.where(matches)[0]
+    # ------------------------------------------------------------------
+    # 2. Get forecast valid time
+    # ------------------------------------------------------------------
+    valid_time_idx = ([int(LEADTIME / HOURS)],)
 
-    if len(indices) == 0:
-        raise ValueError(f"No IFS forecast found for {d}")
+    valid_times_forecast = valid_times[
+        fcst_idx,
+        valid_time_idx
+    ]
 
-    if len(indices) > 1:
-        raise ValueError(f"Multiple IFS forecasts found for {d}")
+    print(
+        f"Forecast index = {fcst_idx}, "
+        f"valid time shape = {np.shape(valid_times_forecast)}"
+    )
 
-    fcst_idx = indices[0]
+    # ------------------------------------------------------------------
+    # 3. Load ALL forecast fields BEFORE creating output file
+    #
+    # If any field does not contain this forecast date, skip the entire
+    # forecast date cleanly.
+    # ------------------------------------------------------------------
+    field_arrays = []
 
-    # Create output netCDF file
-    pathlib.Path(output_folder).mkdir(parents=True, exist_ok=True)
+    try:
+
+        for field in all_fcst_fields:
+
+            print(f"Loading {field} for {d}")
+
+            data = load_fcst(
+                field,
+                d.strftime('%Y%m%d'),
+                0,
+                log_precip=log_precip,
+                norm=True,
+                fcst_path=fcst_input_folder,
+                fcst_norm_dict=local_fcst_norm
+            )
+
+            field_arrays.append(data)
+
+    except ForecastDataUnavailable as e:
+
+        print(f"WARNING: {e}")
+        print(f"Skipping forecast date {d}")
+        continue
+
+    # ------------------------------------------------------------------
+    # 4. All forecast inputs are valid.
+    #    Now create output NetCDF.
+    # ------------------------------------------------------------------
+    pathlib.Path(output_folder).mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     if not save_crps_only:
-        nc_out_path = os.path.join(output_folder, f"GAN_fcst_crps_{d.year}{d.month:02d}{d.day:02d}_00Z.nc")
-    elif save_crps_only:
-        nc_out_path = os.path.join(output_folder, f"GAN_crps_{d.year}{d.month:02d}{d.day:02d}_00Z.nc")
+
+        nc_out_path = os.path.join(
+            output_folder,
+            f"GAN_fcst_crps_"
+            f"{d.year}{d.month:02d}{d.day:02d}_00Z.nc"
+        )
+
+    else:
+
+        nc_out_path = os.path.join(
+            output_folder,
+            f"GAN_crps_"
+            f"{d.year}{d.month:02d}{d.day:02d}_00Z.nc"
+        )
+
+    print(f"Creating output: {nc_out_path}")
+
     netcdf_dict = create_output_file(nc_out_path)
 
     netcdf_dict["time_data"][0] = start_times[fcst_idx]
 
-    valid_time_idx = ([int(LEADTIME/HOURS)],) #for 1x24h forecast with lead time LEADTIME
-    valid_times_forecast = valid_times[fcst_idx, valid_time_idx]
-    print(np.shape(valid_times_forecast))
-    netcdf_dict["valid_time_data"][0,:] = valid_times_forecast
-
-    # For each valid time
-    for valid_time_num in range(len(valid_times_forecast)):
-        
-        # the contents of the next loop are v. similar to load_fcst from data.py,
-        # but not quite the same, since that has different assumptions on how the
-        # forecast data is stored.  TODO: unify the data normalisation between these?
-        field_arrays = []
-        for field in all_fcst_fields:
-            data = load_fcst(field, d.strftime('%Y%m%d'), 0, log_precip=log_precip, norm=True, fcst_path=fcst_input_folder, fcst_norm_dict=local_fcst_norm)
-            field_arrays.append(data)
-
-        # for j, field in enumerate(all_fcst_fields):
-        #     arr = field_arrays[j]
-        #     print(field, arr.min(), arr.max(), arr.mean())
-
-        # print("const input:", network_const_input.min(), network_const_input.max(), network_const_input.mean())
-        
-        network_fcst_input = np.concatenate(field_arrays, axis=-1)  # lat x lon x 2*len(all_fcst_fields)
-        network_fcst_input = np.expand_dims(network_fcst_input, axis=0)  # 1 x lat x lon x 2*len(...)
-        
-        noise_shape = network_fcst_input.shape[1:-1] + (noise_channels,)
-        noise_gen = NoiseGenerator(noise_shape, batch_size=1)
-        z = noise_gen()
-        # print("noise:", z.min(), z.max(), z.mean())
-        progbar = Progbar(ensemble_members)
-
-        ens_cgan_preds = []
-        for ii in range(ensemble_members):
-            gan_inputs = [network_fcst_input, network_const_input, noise_gen()]
-            gan_prediction = gen.predict(gan_inputs, verbose=False)  # 1 x lat x lon x 1
-            pred = denormalise(gan_prediction[0, :, :, 0])
-            if not save_crps_only:
-                netcdf_dict["precipitation"][0, ii, valid_time_num, :, :] = pred
-            
-            ens_cgan_preds.append(pred)
-            progbar.add(1)
-            
-
-        ens_cgan_preds_stacked = np.stack(ens_cgan_preds, axis=0)
-
-    # Truth corresponds to forecast valid date, not forecast start date
-    valid_dt = datetime.combine(d, datetime.min.time()) + timedelta(hours=LEADTIME)
-
-    truth_file = os.path.join(
-        truth_input_folder,
-        str(valid_dt.year),
-        f"{valid_dt.strftime('%Y%m%d')}_06.nc"
+    netcdf_dict["valid_time_data"][0, :] = (
+        valid_times_forecast
     )
 
-    if os.path.exists(truth_file):
-        truth_data, mask = load_truth_and_mask(
-            d.strftime('%Y%m%d'),
-            0,
-            log_precip=log_precip,
-            truth_path=truth_input_folder
+    # ------------------------------------------------------------------
+    # 5. Build GAN forecast input
+    #
+    # This does not need to be inside the valid-time loop because
+    # load_fcst() above has already selected the required LEADTIME.
+    # ------------------------------------------------------------------
+    network_fcst_input = np.concatenate(
+        field_arrays,
+        axis=-1
+    )
+
+    network_fcst_input = np.expand_dims(
+        network_fcst_input,
+        axis=0
+    )
+
+    print(
+        "network_fcst_input shape:",
+        np.shape(network_fcst_input)
+    )
+
+    # ------------------------------------------------------------------
+    # 6. Process forecast valid times
+    # ------------------------------------------------------------------
+    for valid_time_num in range(
+        len(valid_times_forecast)
+    ):
+
+        noise_shape = (
+            network_fcst_input.shape[1:-1]
+            + (noise_channels,)
         )
 
-        truth_data = np.squeeze(truth_data, axis=0)
+        noise_gen = NoiseGenerator(
+            noise_shape,
+            batch_size=1
+        )
 
-        print(f"shape truth = {np.shape(truth_data)}")
-        print(f"shape ens_cgan_preds_stacked = {np.shape(ens_cgan_preds_stacked)}")
+        progbar = Progbar(ensemble_members)
 
-        truth_for_crps = truth_data.copy()
-        truth_for_crps[mask] = np.nan
+        # --------------------------------------------------------------
+        # Generate GAN ensemble
+        # --------------------------------------------------------------
+        ens_cgan_preds = []
 
-        crps = ps.crps_ensemble(
-            truth_for_crps,
-            ens_cgan_preds_stacked,
+        for ii in range(ensemble_members):
+
+            gan_inputs = [
+                network_fcst_input,
+                network_const_input,
+                noise_gen()
+            ]
+
+            gan_prediction = gen.predict(
+                gan_inputs,
+                verbose=False
+            )
+
+            pred = denormalise(
+                gan_prediction[0, :, :, 0]
+            )
+
+            if not save_crps_only:
+
+                netcdf_dict["precipitation"][
+                    0,
+                    ii,
+                    valid_time_num,
+                    :,
+                    :
+                ] = pred
+
+            ens_cgan_preds.append(pred)
+
+            progbar.add(1)
+
+        ens_cgan_preds_stacked = np.stack(
+            ens_cgan_preds,
             axis=0
         )
 
-        print("NaNs in truth_data:", np.isnan(truth_data).sum())
-        print("NaNs in truth_for_crps:", np.isnan(truth_for_crps).sum())
-        print("NaNs in crps:", np.isnan(crps).sum())
-
-    else:
-        print(
-            f"WARNING: No truth for forecast {d}; "
-            f"valid date is {valid_dt.date()}: {truth_file}"
-        )
-        print("Setting CRPS to NaN and continuing.")
-
-        crps = np.full(
-            ens_cgan_preds_stacked.shape[1:],
-            np.nan,
-            dtype=np.float32
+        # --------------------------------------------------------------
+        # 7. Truth corresponds to forecast VALID date
+        # --------------------------------------------------------------
+        valid_dt = (
+            datetime.combine(
+                d,
+                datetime.min.time()
+            )
+            + timedelta(hours=LEADTIME)
         )
 
-    netcdf_dict["crps"][0, valid_time_num, :, :] = crps
+        truth_file = os.path.join(
+            truth_input_folder,
+            str(valid_dt.year),
+            f"{valid_dt.strftime('%Y%m%d')}_06.nc"
+        )
 
-    print("network_fcst_input finite:", np.isfinite(network_fcst_input).all())
-    print("gan_prediction finite:", np.isfinite(gan_prediction).all())
-    print("pred finite:", np.isfinite(pred).all())
-    print("pred min/max:", np.nanmin(pred), np.nanmax(pred))
+        # --------------------------------------------------------------
+        # 8. Calculate CRPS if truth exists
+        # --------------------------------------------------------------
+        if os.path.exists(truth_file):
+
+            truth_data, mask = load_truth_and_mask(
+                d.strftime('%Y%m%d'),
+                0,
+                log_precip=log_precip,
+                truth_path=truth_input_folder
+            )
+
+            truth_data = np.squeeze(
+                truth_data,
+                axis=0
+            )
+
+            print(
+                f"shape truth = "
+                f"{np.shape(truth_data)}"
+            )
+
+            print(
+                f"shape ens_cgan_preds_stacked = "
+                f"{np.shape(ens_cgan_preds_stacked)}"
+            )
+
+            truth_for_crps = truth_data.copy()
+
+            truth_for_crps[mask] = np.nan
+
+            crps = ps.crps_ensemble(
+                truth_for_crps,
+                ens_cgan_preds_stacked,
+                axis=0
+            )
+
+            print(
+                "NaNs in truth_data:",
+                np.isnan(truth_data).sum()
+            )
+
+            print(
+                "NaNs in truth_for_crps:",
+                np.isnan(truth_for_crps).sum()
+            )
+
+            print(
+                "NaNs in crps:",
+                np.isnan(crps).sum()
+            )
+
+        else:
+
+            print(
+                f"WARNING: No truth for forecast {d}; "
+                f"valid date is {valid_dt.date()}: "
+                f"{truth_file}"
+            )
+
+            print(
+                "Setting CRPS to NaN and continuing."
+            )
+
+            crps = np.full(
+                ens_cgan_preds_stacked.shape[1:],
+                np.nan,
+                dtype=np.float32
+            )
+
+        # --------------------------------------------------------------
+        # 9. Write CRPS
+        # --------------------------------------------------------------
+        netcdf_dict["crps"][
+            0,
+            valid_time_num,
+            :,
+            :
+        ] = crps
+
+    # ------------------------------------------------------------------
+    # 10. Diagnostics
+    # ------------------------------------------------------------------
+    print(
+        "network_fcst_input finite:",
+        np.isfinite(network_fcst_input).all()
+    )
+
+    print(
+        "gan_prediction finite:",
+        np.isfinite(gan_prediction).all()
+    )
+
+    print(
+        "pred finite:",
+        np.isfinite(pred).all()
+    )
+
+    print(
+        "pred min/max:",
+        np.nanmin(pred),
+        np.nanmax(pred)
+    )
+
+    # ------------------------------------------------------------------
+    # 11. Close output file ONLY when we're completely finished
+    # ------------------------------------------------------------------
     netcdf_dict["rootgrp"].close()
 
-    # Close the ECMWF forecasts NetCDF file
-    # nc_in.close()
-
-
-
-
-
-
+    print(f"Finished forecast date: {d}")

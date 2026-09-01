@@ -8,19 +8,22 @@ from tfrecords_generator import DataGenerator
 def setup_batch_gen(train_years,
                     batch_size=16,
                     autocoarsen=False,
-                    weights=None):
+                    weights=None,
+                    constants_list=None):
 
     # print(f"autocoarsen flag is {autocoarsen}")
     batch_gen_train = DataGenerator(train_years,
                                     batch_size=batch_size,
                                     autocoarsen=autocoarsen,
-                                    weights=weights)
+                                    weights=weights,
+                                    constant_fields = len(constants_list) if constants_list else 0)
     return batch_gen_train
 
 
 def setup_full_image_dataset(years,
                              batch_size=1,
-                             autocoarsen=False):
+                             autocoarsen=False,
+                             constants_list=None):
 
     from data_generator import DataGenerator as DataGeneratorFull
     from data import get_dates
@@ -33,7 +36,7 @@ def setup_full_image_dataset(years,
                                   batch_size=batch_size,
                                   log_precip=True,
                                   shuffle=True,
-                                  constants=True,
+                                  constants_list=constants_list,
                                   fcst_norm=True,
                                   autocoarsen=autocoarsen)
     return data_full
@@ -43,17 +46,20 @@ def setup_data(train_years=None,
                val_years=None,
                autocoarsen=False,
                weights=None,
-               batch_size=None):
+               batch_size=None,
+               constants_list=None):
 
     batch_gen_train = None if train_years is None \
         else setup_batch_gen(train_years=train_years,
                              batch_size=batch_size,
                              autocoarsen=autocoarsen,
-                             weights=weights)
+                             weights=weights,
+                             constants_list=constants_list)
 
     data_gen_valid = None if val_years is None \
         else setup_full_image_dataset(val_years,
-                                      autocoarsen=autocoarsen)
+                                      autocoarsen=autocoarsen,
+                                      constants_list=constants_list)
 
     gc.collect()
     return batch_gen_train, data_gen_valid

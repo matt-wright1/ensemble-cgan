@@ -79,6 +79,7 @@ if __name__ == "__main__":
     ensemble_size = setup_params["TRAIN"]["ensemble_size"]
     CLtype = setup_params["TRAIN"]["CL_type"]
     content_loss_weight = setup_params["TRAIN"]["content_loss_weight"]
+    constants_list = setup_params["CONSTANTS"]["constants_list"]
     val_years = setup_params["VAL"]["val_years"]
     val_size = setup_params["VAL"]["val_size"]
     num_images = setup_params["EVAL"]["num_batches"]
@@ -86,7 +87,8 @@ if __name__ == "__main__":
     noise_factor = setup_params["EVAL"]["postprocessing_noise_factor"]
     max_pooling = setup_params["EVAL"]["max_pooling"]
     avg_pooling = setup_params["EVAL"]["avg_pooling"]
-    constant_fields = 2  # future todo: have dataset config file?
+
+    constant_fields = len(constants_list) if constants_list else None
 
     # otherwise these are of type string, e.g. '1e-5'
     lr_gen = float(lr_gen)
@@ -153,7 +155,8 @@ if __name__ == "__main__":
             val_years=val_years,
             autocoarsen=autocoarsen,
             weights=training_weights,
-            batch_size=batch_size)
+            batch_size=batch_size,
+            constants_list=constants_list)
 
         if args.restart:  # load weights and run status
 

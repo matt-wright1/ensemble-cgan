@@ -32,6 +32,8 @@ bounds = [-2.98, 28.52, -1.02, 30.98] #lat_min, lon_min, lat_max, lon_max
 HOURS = 6  #6 hour data
 LEADTIME = 30 #Should be multiple of 24 + 6 hours (30, 54, 78, 102, 126, 150, 174)
 
+class ForecastDataUnavailable(Exception):
+    pass
 
 # utility function; generator to iterate over a range of dates
 def daterange(start_date, end_date):
@@ -155,44 +157,61 @@ def load_truth_and_mask(date,
         return y, mask
 
 #MW: needs changing if data source changes
-def load_hires_constants(batch_size=1, constants_path=CONSTANTS_PATH):
-    oro_path = os.path.join(constants_path, "elev.nc")
-    df = xr.load_dataset(oro_path)
-    if crop_to_bounds and 'latitude' in df.coords:
-        lat0, lon0, lat1, lon1 = bounds
-        lat_slice = slice(lat0, lat1) if df.latitude[0] < df.latitude[-1] else slice(lat1, lat0)
-        lon_slice = slice(lon0, lon1) if df.longitude[0] < df.longitude[-1] else slice(lon1, lon0)
-        df = df.sel(latitude=lat_slice, longitude=lon_slice)
+def load_hires_constants(batch_size=1, constants_path=CONSTANTS_PATH, constants_list=None):
 
-    elif crop_to_bounds and 'lat' in df.coords:
-        lat0, lon0, lat1, lon1 = bounds
-        lat_slice = slice(lat0, lat1) if df.lat[0] < df.lat[-1] else slice(lat1, lat0)
-        lon_slice = slice(lon0, lon1) if df.lon[0] < df.lon[-1] else slice(lon1, lon0)
-        df = df.sel(lat=lat_slice, lon=lon_slice)
-    # Orography in m.  Divide by 10,000 to give O(1) normalisation
-    z = df["elevation"].values
-    z /= 10000.0
-    df.close()
+    if not constants_list or len(constants_list) == 0:
+        return None
+    else:
+        return load_hires_constants_from_files(batch_size=batch_size, constants_path=constants_path, constants_list=constants_list)
 
-    lsm_path = os.path.join(constants_path, "lsm.nc")
-    df = xr.load_dataset(lsm_path)
-    if crop_to_bounds and 'latitude' in df.coords:
-        lat0, lon0, lat1, lon1 = bounds
-        lat_slice = slice(lat0, lat1) if df.latitude[0] < df.latitude[-1] else slice(lat1, lat0)
-        lon_slice = slice(lon0, lon1) if df.longitude[0] < df.longitude[-1] else slice(lon1, lon0)
-        df = df.sel(latitude=lat_slice, longitude=lon_slice)
+def load_hires_constants_from_files(batch_size=1, constants_path=CONSTANTS_PATH, constants_list=["elev", "lsm"]):
+    constant_outputs = []
+    expected_shape = None
 
-    elif crop_to_bounds and 'lat' in df.coords:
-        lat0, lon0, lat1, lon1 = bounds
-        lat_slice = slice(lat0, lat1) if df.lat[0] < df.lat[-1] else slice(lat1, lat0)
-        lon_slice = slice(lon0, lon1) if df.lon[0] < df.lon[-1] else slice(lon1, lon0)
-        df = df.sel(lat=lat_slice, lon=lon_slice)
-    # LSM is already 0:1
-    lsm = df["lsm"].values
-    df.close()
+    for c in constants_list:
+        c_path = os.path.join(constants_path, f"{c}.nc")
+        if not os.path.exists(c_path):
+            raise FileNotFoundError(
+                f"Constant '{c}' not found: {c_path}"
+            )
 
-    temp = np.stack([z, lsm], axis=-1)  # shape H x W x 2
-    return np.repeat(temp[np.newaxis, ...], batch_size, axis=0)  # shape batch_size x H x W x 2
+        ds = xr.load_dataset(c_path)
+        if crop_to_bounds and 'latitude' in ds.coords:
+            lat0, lon0, lat1, lon1 = bounds
+            lat_slice = slice(lat0, lat1) if ds.latitude[0] < ds.latitude[-1] else slice(lat1, lat0)
+            lon_slice = slice(lon0, lon1) if ds.longitude[0] < ds.longitude[-1] else slice(lon1, lon0)
+            ds = ds.sel(latitude=lat_slice, longitude=lon_slice)
+    
+        elif crop_to_bounds and 'lat' in ds.coords:
+            lat0, lon0, lat1, lon1 = bounds
+            lat_slice = slice(lat0, lat1) if ds.lat[0] < ds.lat[-1] else slice(lat1, lat0)
+            lon_slice = slice(lon0, lon1) if ds.lon[0] < ds.lon[-1] else slice(lon1, lon0)
+            ds = ds.sel(lat=lat_slice, lon=lon_slice)
+
+        # get values
+        if c in ds.data_vars:
+            vals = ds[c].values
+        else:
+            print(f"{c} is not a variable in {c}.nc, so taking the first variable ({list(ds.data_vars)[0]}) instead")
+            vals = ds[list(ds.data_vars)[0]].values  # just take the first variable if the name doesn't match
+        ds.close()
+
+        if c in ["elev", "elevation", "orography", "orog"] and np.max(vals) > 100: #check if we are using elevation, and if it has already been normalised
+            vals /= 10000.0 #approx normalisation of orography
+
+        if expected_shape is None:
+            expected_shape = vals.shape
+        elif vals.shape != expected_shape:
+            raise ValueError(
+                f"Constant '{c}' has shape {vals.shape}, "
+                f"expected {expected_shape}"
+            )
+        
+        constant_outputs.append(vals)
+
+    temp = np.stack(constant_outputs, axis=-1)  # shape H x W x num_constants
+    
+    return np.repeat(temp[np.newaxis, ...], batch_size, axis=0)  # shape batch_size x H x W x num_constants
 
 
 def load_fcst_truth_batch(dates_batch,
@@ -271,40 +290,48 @@ def load_fcst(field,
             lat_slice = slice(lat_idx[0], lat_idx[-1] + 1)
             lon_slice = slice(lon_idx[0], lon_idx[-1] + 1)
 
-    # Find forecast index from the actual time coordinate rather than
+    # Find forecast index using the actual time coordinate.
+    # Some files contain missing/masked entries in the time dimension,
+    # so these must be ignored.
+
     time_var = nc_file["time"]
     start_times = time_var[:]
 
-    start_datetimes = nc.num2date(
-        start_times,
-        units=time_var.units,
-        calendar=getattr(time_var, "calendar", "standard")
-    )
-
     target_date = datetime.datetime.strptime(date, "%Y%m%d").date()
 
-    matches = np.array([
-        (t.year == target_date.year and
-        t.month == target_date.month and
-        t.day == target_date.day)
-        for t in start_datetimes
-    ])
+    # Convert only valid (unmasked) times.
+    valid_indices = np.where(~np.ma.getmaskarray(start_times))[0]
 
-    indices = np.where(matches)[0]
+    matches = []
 
-    if len(indices) == 0:
-        nc_file.close()
-        raise ValueError(
-            f"No {field} forecast found for {date} in {ds_path}"
+    for idx in valid_indices:
+        t = nc.num2date(
+            start_times[idx],
+            units=time_var.units,
+            calendar=getattr(time_var, "calendar", "standard")
         )
 
-    if len(indices) > 1:
+        if (
+            t.year == target_date.year
+            and t.month == target_date.month
+            and t.day == target_date.day
+        ):
+            matches.append(idx)
+
+    if len(matches) == 0:
         nc_file.close()
-        raise ValueError(
-            f"Multiple {field} forecasts found for {date} in {ds_path}"
+        raise ForecastDataUnavailable(
+            f"No valid {field} forecast found for {date} in {ds_path}"
         )
 
-    fcst_idx = indices[0]
+    if len(matches) > 1:
+        nc_file.close()
+        raise ValueError(
+            f"Multiple {field} forecasts found for {date} in {ds_path}: "
+            f"indices {matches}"
+        )
+
+    fcst_idx = matches[0]
 
     lead_idx1 = int(LEADTIME / HOURS)
     lead_idx2 = (

@@ -31,8 +31,8 @@ from setupmodel import setup_model
 
 
 #Change these forecast dates
-start_date = date(2024, 1, 1)
-end_date   = date(2024, 1, 10)
+start_date = date(2023, 6, 1)
+end_date   = date(2024, 5, 31)
 log_precip = True
 
 # Some setup

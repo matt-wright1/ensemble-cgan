@@ -5,11 +5,15 @@ import yaml
 
 import tensorflow as tf
 
+def get_local_config_path():
+    return os.environ.get(
+        "CGAN_LOCAL_CONFIG",
+        "local_config.yaml"
+    )
 
 def read_config():
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_config.yaml')
     try:
-        with open(config_path, 'r') as f:
+        with open(get_local_config_path(), "r") as f:
             try:
                 localconfig = yaml.safe_load(f)
             except yaml.YAMLError as e:

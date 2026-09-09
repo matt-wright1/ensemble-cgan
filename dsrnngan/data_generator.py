@@ -41,6 +41,7 @@ class DataGenerator(Sequence):
         log_precip=True,
         shuffle=True,
         constants_list=None,
+        constants=None,
         fcst_norm=True,
         autocoarsen=False,
         seed=9999,
@@ -94,6 +95,8 @@ class DataGenerator(Sequence):
         self.fcst_norm = fcst_norm
         self.autocoarsen = autocoarsen
         self.seed = seed
+        self.constants_list = constants_list
+        self.constants = constants
 
         # ----------------------------------------------------
         # Autocoarsening
@@ -107,7 +110,7 @@ class DataGenerator(Sequence):
         # High-resolution constants
         # ----------------------------------------------------
 
-        if constants_list is not None:
+        if self.constants_list is not None:
             self.constants = load_hires_constants(
                 batch_size=self.batch_size,
                 constants_list=constants_list

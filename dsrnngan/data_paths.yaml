@@ -1,4 +1,4 @@
-AOPP_MW:
+AOPP_MW_2CONSTANTS:
     GENERAL:
         TRUTH_PATH: '/network/scratch/matthewwright/chenies_cropped_daily'
         MASK_PATH: '/network/scratch/matthewwright/chenies_cropped_daily/mask' #Use None if no mask
@@ -8,3 +8,26 @@ AOPP_MW:
         
     TFRecords:
         tfrecords_path: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/UK_chenies/tfrecords'
+
+AOPP_MW_3CONSTANTS:
+    GENERAL:
+        TRUTH_PATH: '/network/scratch/matthewwright/chenies_cropped_daily'
+        MASK_PATH: '/network/scratch/matthewwright/chenies_cropped_daily/mask' #Use None if no mask
+        FORECAST_PATH: "/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/ifs/chenies_radar_grid"
+        CONSTANTS_PATH: "/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/nimrod_data/chenies/1km/constants"
+        NORMALISATION_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/UK_chenies/tfrecords_3con'
+        
+    TFRecords:
+        tfrecords_path: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/UK_chenies/tfrecords_3con'
+
+
+AOPP_MW_5CONSTANTS:
+    GENERAL:
+        TRUTH_PATH: '/network/scratch/matthewwright/chenies_cropped_daily'
+        MASK_PATH: '/network/scratch/matthewwright/chenies_cropped_daily/mask' #Use None if no mask
+        FORECAST_PATH: "/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/ifs/chenies_radar_grid"
+        CONSTANTS_PATH: "/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/nimrod_data/chenies/1km/constants"
+        NORMALISATION_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/UK_chenies/tfrecords_5con'
+        
+    TFRecords:
+        tfrecords_path: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/UK_chenies/tfrecords_5con'

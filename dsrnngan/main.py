@@ -1,19 +1,124 @@
 import argparse
+import yaml
 import gc
 import json
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # suppress TF debug message spam in v2.12
-import yaml
 from pathlib import Path
 
-import matplotlib; matplotlib.use("Agg")  # noqa: E702
+# ------------------------------------------------------------
+# Parse command-line arguments first
+# ------------------------------------------------------------
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    "--config",
+    required=True,
+    help="Path to configuration file"
+)
+
+parser.set_defaults(do_training=True)
+
+parser.add_argument(
+    "--no_train",
+    dest="do_training",
+    action="store_false",
+    help="Do NOT carry out training, only perform eval"
+)
+
+parser.add_argument(
+    "--restart",
+    dest="restart",
+    action="store_true",
+    help="Restart training from latest checkpoint"
+)
+
+group = parser.add_mutually_exclusive_group()
+
+group.add_argument(
+    "--eval_full",
+    dest="evalnum",
+    action="store_const",
+    const="full"
+)
+
+group.add_argument(
+    "--eval_short",
+    dest="evalnum",
+    action="store_const",
+    const="short"
+)
+
+group.add_argument(
+    "--eval_blitz",
+    dest="evalnum",
+    action="store_const",
+    const="blitz"
+)
+
+parser.set_defaults(evalnum=None)
+parser.set_defaults(evaluate=False)
+parser.set_defaults(plot_ranks=False)
+
+parser.add_argument(
+    "--evaluate",
+    dest="evaluate",
+    action="store_true",
+    help="Include evaluation on full-size images"
+)
+
+parser.add_argument(
+    "--plot_ranks",
+    dest="plot_ranks",
+    action="store_true",
+    help="Plot rank histograms"
+)
+
+args = parser.parse_args()
+
+
+# ------------------------------------------------------------
+# Read experiment config before importing cGAN modules, to ensure correct local_config
+# ------------------------------------------------------------
+
+with open(args.config, "r") as f:
+    setup_params = yaml.safe_load(f)
+
+
+# ------------------------------------------------------------
+# Select local config for this process
+# ------------------------------------------------------------
+
+local_config_path = setup_params["GENERAL"]["local_config_path"]
+
+# Resolve relative to experiment config file
+if not os.path.isabs(local_config_path):
+    local_config_path = os.path.join(
+        os.path.dirname(os.path.abspath(args.config)),
+        local_config_path,
+    )
+
+os.environ["CGAN_LOCAL_CONFIG"] = local_config_path
+
+print(f"Experiment config: {os.path.abspath(args.config)}")
+print(f"Local config:      {local_config_path}")
+
+
+# ------------------------------------------------------------
+# NOW import modules which read local_config
+# ------------------------------------------------------------
+
+import matplotlib
+matplotlib.use("Agg")
+
 import numpy as np
 import pandas as pd
 
+import read_config
 import data
 import evaluation
 import plots
-import read_config
 import setupdata
 import setupmodel
 import train
@@ -23,41 +128,18 @@ if __name__ == "__main__":
     read_config.set_gpu_mode()  # set up whether to use GPU, and mem alloc mode
     df_dict = read_config.read_downscaling_factor()  # read downscaling params
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", help="Path to configuration file")
-    parser.set_defaults(do_training=True)
-    parser.add_argument('--no_train', dest='do_training', action='store_false',
-                        help="Do NOT carry out training, only perform eval")
-    parser.add_argument('--restart', dest='restart', action='store_true',
-                        help="Restart training from latest checkpoint")
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument('--eval_full', dest='evalnum', action='store_const', const="full")
-    group.add_argument('--eval_short', dest='evalnum', action='store_const', const="short")
-    group.add_argument('--eval_blitz', dest='evalnum', action='store_const', const="blitz")
-    parser.set_defaults(evalnum=None)
-    parser.set_defaults(evaluate=False)
-    parser.set_defaults(plot_ranks=False)
-    parser.add_argument('--evaluate', dest='evaluate', action='store_true',
-                        help="Include evaluation on full-size images")
-    parser.add_argument('--plot_ranks', dest='plot_ranks', action='store_true',
-                        help="Plot rank histograms")
-    args = parser.parse_args()
-
+    #Checks
     if args.evaluate and args.evalnum is None:
-        raise RuntimeError("You asked for evaluation to occur, but did not pass in '--eval_full', '--eval_short', or '--eval_blitz' to specify length of evaluation")
+        raise RuntimeError(
+            "You asked for evaluation to occur, but did not pass in "
+            "'--eval_full', '--eval_short', or '--eval_blitz' "
+            "to specify length of evaluation"
+        )
 
-    # Read in the configurations
-    if args.config is not None:
-        config_path = args.config
-    else:
-        raise Exception("Please specify configuration!")
-
-    with open(config_path, 'r') as f:
-        try:
-            setup_params = yaml.safe_load(f)
-            # print(setup_params)
-        except yaml.YAMLError as exc:
-            print(exc)
+    if not os.path.isfile(local_config_path):
+        raise FileNotFoundError(
+            f"Local config does not exist: {local_config_path}"
+        )
 
     mode = setup_params["GENERAL"]["mode"]
     arch = setup_params["MODEL"]["architecture"]
@@ -266,6 +348,7 @@ if __name__ == "__main__":
                                                  filters_disc=filters_disc,
                                                  input_channels=input_channels,
                                                  constant_fields=constant_fields,
+                                                 constants_list=constants_list,
                                                  latent_variables=latent_variables,
                                                  noise_channels=noise_channels,
                                                  padding=padding,

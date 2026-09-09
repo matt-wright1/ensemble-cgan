@@ -29,6 +29,7 @@ def setup_inputs(*,
                  autocoarsen,
                  input_channels,
                  constant_fields,
+                 constants_list,
                  filters_gen,
                  filters_disc,
                  noise_channels,
@@ -53,7 +54,8 @@ def setup_inputs(*,
     print('Loading full sized image dataset')
     _, data_gen_valid = setupdata.setup_data(
         val_years=val_years,
-        autocoarsen=autocoarsen)
+        autocoarsen=autocoarsen,
+        constants_list=constants_list)
     return gen, data_gen_valid
 
 
@@ -319,6 +321,7 @@ def evaluate_multiple_checkpoints(*,
                                   filters_disc,
                                   input_channels,
                                   constant_fields,
+                                  constants_list,
                                   latent_variables,
                                   noise_channels,
                                   padding,
@@ -333,6 +336,7 @@ def evaluate_multiple_checkpoints(*,
                                        autocoarsen=autocoarsen,
                                        input_channels=input_channels,
                                        constant_fields=constant_fields,
+                                       constants_list=constants_list,
                                        filters_gen=filters_gen,
                                        filters_disc=filters_disc,
                                        noise_channels=noise_channels,

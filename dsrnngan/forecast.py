@@ -48,6 +48,12 @@ parser.add_argument(
     default="forecast.yaml",
     help="Path to forecast configuration YAML file."
 )
+parser.add_argument(
+    "config_file",
+    nargs="?",
+    default="config.yaml",
+    help="Path to forecast configuration YAML file."
+)
 args = parser.parse_args()
 
 with open(args.yaml_file, "r") as f:
@@ -56,17 +62,25 @@ with open(args.yaml_file, "r") as f:
     except yaml.YAMLError as exc:
         print(exc)
         raise
+with open(args.config_file, "r") as f:
+    try:
+        setup_params = yaml.safe_load(f)
+    except yaml.YAMLError as exc:
+        print(exc)
+        raise
 
 model_folder = fcst_params["MODEL"]["folder"]
 checkpoint = fcst_params["MODEL"]["checkpoint"]
-include_cape = fcst_params["MODEL"]["include_cape"]
-fcst_input_folder = fcst_params["INPUT"]["fcst_folder"]
-truth_input_folder = fcst_params["INPUT"]["truth_folder"]
-constants_folder = fcst_params["INPUT"]["constants_folder"]
-normalisation_folder = fcst_params["INPUT"]["normalisation_folder"]
+include_cape = setup_params["MODEL"]["include_cape"]
+fcst_input_folder = data_paths["GENERAL"]["FORECAST_PATH"]
+truth_input_folder = data_paths["GENERAL"]["TRUTH_PATH"]
+constants_folder = data_paths["GENERAL"]["CONSTANTS_PATH"]
+normalisation_folder = data_paths["GENERAL"]["NORMALISATION_PATH"]
 output_folder = fcst_params["OUTPUT"]["folder"]
 ensemble_members = fcst_params["OUTPUT"]["ensemble_members"]
 save_crps_only = fcst_params["OUTPUT"]["save_crps_only"]
+constants_list = setup_params["CONSTANTS"]["constants_list"]
+constant_fields = len(constants_list) if constants_list else None
 
 local_fcst_norm = load_fcst_norm(year=2018, normalisation_path=normalisation_folder)
 assert local_fcst_norm is not None
@@ -96,8 +110,6 @@ filters_gen = setup_params["GENERATOR"]["filters_gen"]
 noise_channels = setup_params["GENERATOR"]["noise_channels"]
 latent_variables = setup_params["GENERATOR"]["latent_variables"]
 filters_disc = setup_params["DISCRIMINATOR"]["filters_disc"]
-# TODO: avoid setting up discriminator in forecast mode?
-constant_fields = 2
 
 assert mode == "GAN", "standalone forecast script only for GAN, not VAE-GAN or deterministic model"
 
@@ -119,7 +131,7 @@ gen = model.gen
 print(weights_fn)
 gen.load_weights(weights_fn)
 
-network_const_input = load_hires_constants(batch_size=1, constants_path=constants_folder)  # 1 x lats x lons x 2
+network_const_input = load_hires_constants(batch_size=1, constants_path=constants_folder, constants_list=constants_list)  # 1 x lats x lons x 2
 
 
 def create_output_file(nc_out_path):

@@ -30,6 +30,7 @@ from noise import NoiseGenerator
 from setupmodel import setup_model
 
 import xesmf as xe
+import xarray as xr
 
 start_date = date(2020, 1, 1)
 end_date   = date(2020, 12, 31)
@@ -248,7 +249,7 @@ for d in iter_dates(start_date, end_date):
     fcst_idx = d.toordinal() - date(d.year, 1, 1).toordinal()
     netcdf_dict["time_data"][0] = start_times[fcst_idx]
 
-    valid_time_idx = ([LEADTIME/HOURS],) #for 1x24h forecast with lead time 30h
+    valid_time_idx = ([int(LEADTIME/HOURS)],) #for 1x24h forecast with lead time 30h
     valid_times_forecast = valid_times[fcst_idx, valid_time_idx]
     print(np.shape(valid_times_forecast))
     netcdf_dict["valid_time_data"][0,:] = valid_times_forecast
@@ -303,16 +304,21 @@ for d in iter_dates(start_date, end_date):
         # forecast_crop = ens_cgan_preds_stacked[:, f_lat_idx[:, None], f_lon_idx]
         # truth_crop = truth_data[np.ix_(t_lat_idx, t_lon_idx)]
 
-        grid_in = {
-            "lat": fcst_lat,
-            "lon": fcst_lon,
-        }
-        grid_out = {
-            "lat": latitude,
-            "lon": longitude,
-        }
+        grid_in = xr.Dataset(
+            coords={
+                "lat": fcst_lat,
+                "lon": fcst_lon,
+            }
+        )
 
-        regridder = xe.Regridder(grid_in, grid_out, "bilinear", periodic=False)
+        grid_out = xr.Dataset(
+            coords={
+                "lat": latitude,
+                "lon": longitude,
+            }
+        )
+
+        regridder = xe.Regridder(grid_in, grid_out, "conservative", periodic=False)
 
         # If forecast is (member, lat, lon)
         forecast_regridded = regridder(ens_cgan_preds_stacked)

@@ -24,7 +24,7 @@ import netCDF4 as nc
 import numpy as np
 from tensorflow.keras.utils import Progbar
 
-from data import HOURS, LEADTIME, all_fcst_fields, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm
+from data import HOURS, LEADTIME, all_fcst_fields, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm, crop_to_bounds, bounds
 import read_config
 from noise import NoiseGenerator
 from setupmodel import setup_model
@@ -200,6 +200,26 @@ for d in iter_dates(start_date, end_date):
         valid_times = nc_in["fcst_valid_time"][:]
         latitude = nc_in["latitude"][:]
         longitude = nc_in["longitude"][:]
+
+        if crop_to_bounds:
+            lat_min, lon_min, lat_max, lon_max = bounds
+
+            # Boolean masks work whether coordinates are ascending or descending
+            lat_mask = (latitude >= lat_min) & (latitude <= lat_max)
+            lon_mask = (longitude >= lon_min) & (longitude <= lon_max)
+
+            if not lat_mask.any():
+                raise ValueError(
+                    f"No latitude values found within bounds {lat_min} to {lat_max}."
+                )
+
+            if not lon_mask.any():
+                raise ValueError(
+                    f"No longitude values found within bounds {lon_min} to {lon_max}."
+                )
+
+            latitude = latitude[lat_mask]
+            longitude = longitude[lon_mask]
     # nc_in.close()
 
     # The datetime corresponding to this start time

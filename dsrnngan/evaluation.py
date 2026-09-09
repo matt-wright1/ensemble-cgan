@@ -119,6 +119,7 @@ def eval_one_chkpt(*,
         cond = inputs['lo_res_inputs']
         const = inputs['hi_res_inputs']
         truth = outputs['output']
+        print(np.shape(truth))
         mask = outputs['mask']
 
         masked_truth = ma.array(truth, mask=mask)

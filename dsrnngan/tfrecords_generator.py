@@ -3,13 +3,14 @@ import os
 import random
 import math
 from pathlib import Path
+import re
 
 import numpy as np
 import tensorflow as tf
 import xarray as xr
 
 import read_config
-from data import all_fcst_fields, denormalise, get_dates, HOURS
+from data import all_fcst_fields, denormalise, get_dates, HOURS, crop_to_bounds, bounds
 
 
 data_paths = read_config.get_data_paths()
@@ -20,13 +21,30 @@ ds_fac = read_config.read_downscaling_factor()["downscaling_factor"]
 CLASSES = 4
 # Find H/W of image
 # Find the first file anywhere under the directory
-truth_file = next((p for p in truth_folder.rglob("*") if p.is_file()), None)
+truth_files = sorted(
+    p
+    for p in truth_folder.rglob("*.nc")
+    if any(re.fullmatch(r"\d{4}", parent.name) for parent in p.parents)
+)
+truth_file = truth_files[0] if truth_files else None
 
 if truth_file is None:
     raise FileNotFoundError(f"No files found in {truth_folder}")
 
 with xr.open_dataset(truth_file) as ds:
     # Handle either lat/lon or latitude/longitude
+    if crop_to_bounds and "latitude" in ds.coords:
+        lat0, lon0, lat1, lon1 = bounds
+        lat_slice = slice(lat0, lat1) if ds.latitude[0] < ds.latitude[-1] else slice(lat1, lat0)
+        lon_slice = slice(lon0, lon1) if ds.longitude[0] < ds.longitude[-1] else slice(lon1, lon0)
+        ds = ds.sel(latitude=lat_slice, longitude=lon_slice)
+
+    elif crop_to_bounds and "lat" in ds.coords:
+        lat0, lon0, lat1, lon1 = bounds
+        lat_slice = slice(lat0, lat1) if ds.lat[0] < ds.lat[-1] else slice(lat1, lat0)
+        lon_slice = slice(lon0, lon1) if ds.lon[0] < ds.lon[-1] else slice(lon1, lon0)
+        ds = ds.sel(lat=lat_slice, lon=lon_slice)
+
     lat_name = "lat" if "lat" in ds.coords else "latitude"
     lon_name = "lon" if "lon" in ds.coords else "longitude"
 
@@ -34,7 +52,7 @@ with xr.open_dataset(truth_file) as ds:
     IMAGE_SIZE_W = ds.sizes[lon_name]
 
 def choose_square_dim(h: int, w: int, close_px: int = 4) -> int:
-    m = min(h, w)
+    m = min(h, w, 128)
 
     # Largest power of 2 strictly below m
     p2 = 1 << (m.bit_length() - 1)

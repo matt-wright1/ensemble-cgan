@@ -25,10 +25,11 @@ all_fcst_fields = ['cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw
 accumulated_fields = ['cp', 'ssr', 'tp']
 nonnegative_fields = ['cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp'] #MW: things that can't be below 0
 
+crop_to_bounds = True #if you want to crop constants and forecasts to bounds
+bounds = [-2.98, 28.52, -1.02, 30.98] #lat_min, lon_min, lat_max, lon_max
 
 HOURS = 6  #6 hour data
 LEADTIME = 30 #Should be multiple of 24 + 6 hours (30, 54, 78, 102, 126, 150, 174)
-
 
 # utility function; generator to iterate over a range of dates
 def daterange(start_date, end_date):
@@ -125,10 +126,21 @@ def load_truth_and_mask(date,
     fname = valid_dt.strftime('%Y%m%d_%H')
     data_path = os.path.join(truth_path, f"{year}/{fname}.nc")
 
-    ds = xr.open_dataset(data_path)
-    da = ds["precipitation"] #MW: changed from ["precipitationCal"]
+    df = xr.open_dataset(data_path)
+    if crop_to_bounds and 'latitude' in df.coords:
+        lat0, lon0, lat1, lon1 = bounds
+        lat_slice = slice(lat0, lat1) if df.latitude[0] < df.latitude[-1] else slice(lat1, lat0)
+        lon_slice = slice(lon0, lon1) if df.longitude[0] < df.longitude[-1] else slice(lon1, lon0)
+        df = df.sel(latitude=lat_slice, longitude=lon_slice)
+
+    elif crop_to_bounds and 'lat' in df.coords:
+        lat0, lon0, lat1, lon1 = bounds
+        lat_slice = slice(lat0, lat1) if df.lat[0] < df.lat[-1] else slice(lat1, lat0)
+        lon_slice = slice(lon0, lon1) if df.lon[0] < df.lon[-1] else slice(lon1, lon0)
+        df = df.sel(lat=lat_slice, lon=lon_slice)
+    da = df["precipitation"] #MW: changed from ["precipitationCal"]
     y = da.values
-    ds.close()
+    df.close()
 
     # mask: False for valid truth data, True for invalid truth data
     # (compatible with the NumPy masked array functionality)
@@ -144,6 +156,17 @@ def load_truth_and_mask(date,
 def load_hires_constants(batch_size=1, constants_path=CONSTANTS_PATH):
     oro_path = os.path.join(constants_path, "elev.nc")
     df = xr.load_dataset(oro_path)
+    if crop_to_bounds and 'latitude' in df.coords:
+        lat0, lon0, lat1, lon1 = bounds
+        lat_slice = slice(lat0, lat1) if df.latitude[0] < df.latitude[-1] else slice(lat1, lat0)
+        lon_slice = slice(lon0, lon1) if df.longitude[0] < df.longitude[-1] else slice(lon1, lon0)
+        df = df.sel(latitude=lat_slice, longitude=lon_slice)
+
+    elif crop_to_bounds and 'lat' in df.coords:
+        lat0, lon0, lat1, lon1 = bounds
+        lat_slice = slice(lat0, lat1) if df.lat[0] < df.lat[-1] else slice(lat1, lat0)
+        lon_slice = slice(lon0, lon1) if df.lon[0] < df.lon[-1] else slice(lon1, lon0)
+        df = df.sel(lat=lat_slice, lon=lon_slice)
     # Orography in m.  Divide by 10,000 to give O(1) normalisation
     z = df["elevation"].values
     z /= 10000.0
@@ -151,6 +174,17 @@ def load_hires_constants(batch_size=1, constants_path=CONSTANTS_PATH):
 
     lsm_path = os.path.join(constants_path, "lsm.nc")
     df = xr.load_dataset(lsm_path)
+    if crop_to_bounds and 'latitude' in df.coords:
+        lat0, lon0, lat1, lon1 = bounds
+        lat_slice = slice(lat0, lat1) if df.latitude[0] < df.latitude[-1] else slice(lat1, lat0)
+        lon_slice = slice(lon0, lon1) if df.longitude[0] < df.longitude[-1] else slice(lon1, lon0)
+        df = df.sel(latitude=lat_slice, longitude=lon_slice)
+
+    elif crop_to_bounds and 'lat' in df.coords:
+        lat0, lon0, lat1, lon1 = bounds
+        lat_slice = slice(lat0, lat1) if df.lat[0] < df.lat[-1] else slice(lat1, lat0)
+        lon_slice = slice(lon0, lon1) if df.lon[0] < df.lon[-1] else slice(lon1, lon0)
+        df = df.sel(lat=lat_slice, lon=lon_slice)
     # LSM is already 0:1
     lsm = df["lsm"].values
     df.close()
@@ -217,6 +251,24 @@ def load_fcst(field,
     all_data_sd = nc_file[f"{field}_sd"]
     # data is stored as [day of year, valid time index, lat, lon]
 
+    lat_slice = slice(None)
+    lon_slice = slice(None)
+    if crop_to_bounds and bounds is not None:
+        if 'latitude' in nc_file.variables and 'longitude' in nc_file.variables:
+            lat_vals = np.asarray(nc_file.variables['latitude'][:])
+            lon_vals = np.asarray(nc_file.variables['longitude'][:])
+            lat_idx = np.where((lat_vals >= min(bounds[0], bounds[2])) & (lat_vals <= max(bounds[0], bounds[2])))[0]
+            lon_idx = np.where((lon_vals >= min(bounds[1], bounds[3])) & (lon_vals <= max(bounds[1], bounds[3])))[0]
+            lat_slice = slice(lat_idx[0], lat_idx[-1] + 1)
+            lon_slice = slice(lon_idx[0], lon_idx[-1] + 1)
+        elif 'lat' in nc_file.variables and 'lon' in nc_file.variables:
+            lat_vals = np.asarray(nc_file.variables['lat'][:])
+            lon_vals = np.asarray(nc_file.variables['lon'][:])
+            lat_idx = np.where((lat_vals >= min(bounds[0], bounds[2])) & (lat_vals <= max(bounds[0], bounds[2])))[0]
+            lon_idx = np.where((lon_vals >= min(bounds[1], bounds[3])) & (lon_vals <= max(bounds[1], bounds[3])))[0]
+            lat_slice = slice(lat_idx[0], lat_idx[-1] + 1)
+            lon_slice = slice(lon_idx[0], lon_idx[-1] + 1)
+
     # calculate first index (i.e., day of year, with Jan 1 = 0)
     fcst_date = datetime.datetime.strptime(date, "%Y%m%d").date()
     fcst_idx = fcst_date.toordinal() - datetime.date(year, 1, 1).toordinal()
@@ -228,13 +280,13 @@ def load_fcst(field,
         # return mean, sd, 0, 0.  zero fields are so that each field returns a 4 x ny x nx array.
         # accumulated fields have been pre-processed s.t. data[:, j, :, :] has accumulation between times j and j+1
         
-        data1 = np.mean(all_data_mean[fcst_idx, lead_idx1:lead_idx2, :, :], axis=0)            # Mean of the accumulations
-        data2 = np.sqrt(np.mean(all_data_sd[fcst_idx, lead_idx1:lead_idx2, :, :]**2, axis=0))  # RMS of the standard deviations
+        data1 = np.mean(all_data_mean[fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice], axis=0)            # Mean of the accumulations
+        data2 = np.sqrt(np.mean(all_data_sd[fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice]**2, axis=0))  # RMS of the standard deviations
         data = np.stack([data1, data2], axis=-1)
     else:
         # return mean and std computed using the trapezium rule
-        temp_data_mean = all_data_mean[fcst_idx, lead_idx1:lead_idx2, :, :]
-        temp_data_var = all_data_sd[fcst_idx, lead_idx1:lead_idx2, :, :]**2  # Convert to variances
+        temp_data_mean = all_data_mean[fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice]
+        temp_data_var = all_data_sd[fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice]**2  # Convert to variances
         data1 = (temp_data_mean[0, :, :]/2 + np.sum(temp_data_mean[1:4,:,:], axis=0) + temp_data_mean[4,:,:]/2)/4
         data2 = (temp_data_var[0, :, :]/2 + np.sum(temp_data_var[1:4,:,:], axis=0) + temp_data_var[4,:,:]/2)/4
         data = np.stack([data1, np.sqrt(data2)], axis=-1)
@@ -336,6 +388,20 @@ def get_fcst_stats_fast(field, year=2018):
         data = nc_file[f"{field}_mean"][:, :-1, :, :]  # last time_idx is full of zeros
     else:
         data = nc_file[f"{field}_mean"][:, :, :, :]
+
+    if crop_to_bounds and bounds is not None:
+        if 'latitude' in nc_file.variables and 'longitude' in nc_file.variables:
+            lat_vals = np.asarray(nc_file.variables['latitude'][:])
+            lon_vals = np.asarray(nc_file.variables['longitude'][:])
+            lat_idx = np.where((lat_vals >= min(bounds[0], bounds[2])) & (lat_vals <= max(bounds[0], bounds[2])))[0]
+            lon_idx = np.where((lon_vals >= min(bounds[1], bounds[3])) & (lon_vals <= max(bounds[1], bounds[3])))[0]
+            data = data[:, :, lat_idx[0]:lat_idx[-1] + 1, lon_idx[0]:lon_idx[-1] + 1]
+        elif 'lat' in nc_file.variables and 'lon' in nc_file.variables:
+            lat_vals = np.asarray(nc_file.variables['lat'][:])
+            lon_vals = np.asarray(nc_file.variables['lon'][:])
+            lat_idx = np.where((lat_vals >= min(bounds[0], bounds[2])) & (lat_vals <= max(bounds[0], bounds[2])))[0]
+            lon_idx = np.where((lon_vals >= min(bounds[1], bounds[3])) & (lon_vals <= max(bounds[1], bounds[3])))[0]
+            data = data[:, :, lat_idx[0]:lat_idx[-1] + 1, lon_idx[0]:lon_idx[-1] + 1]
 
     nc_file.close()
 

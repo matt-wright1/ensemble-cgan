@@ -78,6 +78,7 @@ def get_dates(year,
     truth_cache = set()
     start_date = datetime.date(year, 1, 1)
     end_date = datetime.date(year+1, 1, end_hour//24 + 2)  # go a bit into following year
+
     for curdate in daterange(start_date, end_date):
         datestr = curdate.strftime('%Y%m%d')
         fname = f"{datestr}_06" #TO CHECK
@@ -91,18 +92,14 @@ def get_dates(year,
     valid_dates = []
 
     for curdate in daterange(start_date, end_date):
-            valid = True
-
             # Convert forecast start date to datetime, otherwise %H becomes 00
             # fcst_dt = datetime.datetime.combine(curdate, datetime.time(0, 0))
             truth_fname = curdate.strftime("%Y%m%d_06")
 
             if truth_fname not in truth_cache:
-                valid = False
-                break
+                continue
 
-            if valid:
-                valid_dates.append(curdate.strftime("%Y%m%d"))
+            valid_dates.append(curdate.strftime("%Y%m%d"))
 
     return valid_dates
 

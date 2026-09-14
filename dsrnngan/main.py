@@ -1,15 +1,41 @@
 import argparse
-import gc
-import json
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # suppress TF debug message spam in v2.12
 import yaml
-from pathlib import Path
 
-import matplotlib; matplotlib.use("Agg")  # noqa: E702
-import numpy as np
-import pandas as pd
+parser = argparse.ArgumentParser()
 
+parser.add_argument(
+    "--config",
+    required=True,
+    help="Path to configuration file"
+)
+
+# ... your existing parser arguments ...
+
+args = parser.parse_args()
+
+with open(args.config, "r") as f:
+    setup_params = yaml.safe_load(f)
+
+local_config_path = setup_params["GENERAL"]["local_config_path"]
+
+if not os.path.isabs(local_config_path):
+    local_config_path = os.path.join(
+        os.path.dirname(os.path.abspath(args.config)),
+        local_config_path,
+    )
+
+if not os.path.isfile(local_config_path):
+    raise FileNotFoundError(
+        f"Local config does not exist: {local_config_path}"
+    )
+
+os.environ["CGAN_LOCAL_CONFIG"] = local_config_path
+
+print(f"Experiment config: {os.path.abspath(args.config)}")
+print(f"Local config:      {local_config_path}")
+
+# ONLY NOW import modules that ultimately import read_config
 import data
 import evaluation
 import plots

@@ -142,6 +142,15 @@ if __name__ == "__main__":
 
     config = load_experiment_config(args.config)
 
+    #Set crop_to_bounds
+    os.environ["CGAN_CROP_TO_BOUNDS"] = str(
+        config["DATA"]["crop_to_bounds"]
+    )
+
+    os.environ["CGAN_BOUNDS"] = ",".join(
+        str(x) for x in config["DATA"]["bounds"]
+    )
+
     # ------------------------------------------------------------
     # Select local config for THIS process
     # ------------------------------------------------------------

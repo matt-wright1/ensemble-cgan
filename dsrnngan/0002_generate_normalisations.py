@@ -33,6 +33,14 @@ args = parser.parse_args()
 with open(args.config, "r") as f:
     setup_params = yaml.safe_load(f)
 
+os.environ["CGAN_CROP_TO_BOUNDS"] = str(
+    setup_params["DATA"]["crop_to_bounds"]
+)
+
+os.environ["CGAN_BOUNDS"] = ",".join(
+    str(x) for x in setup_params["DATA"]["bounds"]
+)
+
 
 # ------------------------------------------------------------
 # Select local config for THIS process

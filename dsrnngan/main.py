@@ -19,6 +19,7 @@ with open(args.config, "r") as f:
 
 local_config_path = setup_params["GENERAL"]["local_config_path"]
 
+
 if not os.path.isabs(local_config_path):
     local_config_path = os.path.join(
         os.path.dirname(os.path.abspath(args.config)),
@@ -31,6 +32,8 @@ if not os.path.isfile(local_config_path):
     )
 
 os.environ["CGAN_LOCAL_CONFIG"] = local_config_path
+os.environ["CGAN_CROP_TO_BOUNDS"] = str(setup_params["DATA"]["crop_to_bounds"])
+os.environ["CGAN_BOUNDS"] = ",".join(str(x) for x in setup_params["DATA"]["bounds"])
 
 print(f"Experiment config: {os.path.abspath(args.config)}")
 print(f"Local config:      {local_config_path}")

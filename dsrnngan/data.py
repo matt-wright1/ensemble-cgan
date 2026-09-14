@@ -25,11 +25,20 @@ all_fcst_fields = ['cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw
 accumulated_fields = ['cp', 'ssr', 'tp']
 nonnegative_fields = ['cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp'] #MW: things that can't be below 0
 
-crop_to_bounds = True #if you want to crop constants and forecasts to bounds
-bounds = [-2.98, 28.52, -1.02, 30.98] #lat_min, lon_min, lat_max, lon_max
-
 HOURS = 6  #6 hour data
 LEADTIME = 30 #Should be multiple of 24 + 6 hours (30, 54, 78, 102, 126, 150, 174)
+
+crop_to_bounds = (
+    os.environ.get("CGAN_CROP_TO_BOUNDS", "False").lower()
+    == "true"
+)
+
+bounds_str = os.environ.get("CGAN_BOUNDS")
+
+if bounds_str is not None:
+    bounds = [float(x) for x in bounds_str.split(",")]
+else:
+    bounds = None
 
 # utility function; generator to iterate over a range of dates
 def daterange(start_date, end_date):

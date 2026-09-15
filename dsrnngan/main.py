@@ -1,57 +1,22 @@
 import argparse
+import gc
+import json
 import os
+
+import numpy as np
+import pandas as pd
 import yaml
 
-parser = argparse.ArgumentParser()
-
-parser.add_argument(
-    "--config",
-    required=True,
-    help="Path to configuration file"
-)
-
-# ... your existing parser arguments ...
-
-args = parser.parse_args()
-
-with open(args.config, "r") as f:
-    setup_params = yaml.safe_load(f)
-
-local_config_path = setup_params["GENERAL"]["local_config_path"]
-
-
-if not os.path.isabs(local_config_path):
-    local_config_path = os.path.join(
-        os.path.dirname(os.path.abspath(args.config)),
-        local_config_path,
-    )
-
-if not os.path.isfile(local_config_path):
-    raise FileNotFoundError(
-        f"Local config does not exist: {local_config_path}"
-    )
-
-os.environ["CGAN_LOCAL_CONFIG"] = local_config_path
-os.environ["CGAN_CROP_TO_BOUNDS"] = str(setup_params["DATA"]["crop_to_bounds"])
-os.environ["CGAN_BOUNDS"] = ",".join(str(x) for x in setup_params["DATA"]["bounds"])
-
-print(f"Experiment config: {os.path.abspath(args.config)}")
-print(f"Local config:      {local_config_path}")
-
-# ONLY NOW import modules that ultimately import read_config
-import data
-import evaluation
-import plots
-import read_config
-import setupdata
-import setupmodel
-import train
-
+from pathlib import Path
 
 if __name__ == "__main__":
-    read_config.set_gpu_mode()  # set up whether to use GPU, and mem alloc mode
-    df_dict = read_config.read_downscaling_factor()  # read downscaling params
+    parser = argparse.ArgumentParser()
 
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="Path to configuration file"
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", help="Path to configuration file")
     parser.set_defaults(do_training=True)
@@ -71,6 +36,41 @@ if __name__ == "__main__":
     parser.add_argument('--plot_ranks', dest='plot_ranks', action='store_true',
                         help="Plot rank histograms")
     args = parser.parse_args()
+
+    with open(args.config, "r") as f:
+        setup_params = yaml.safe_load(f)
+
+    local_config_path = setup_params["GENERAL"]["local_config_path"]
+
+    if not os.path.isabs(local_config_path):
+        local_config_path = os.path.join(
+            os.path.dirname(os.path.abspath(args.config)),
+            local_config_path,
+        )
+
+    if not os.path.isfile(local_config_path):
+        raise FileNotFoundError(
+            f"Local config does not exist: {local_config_path}"
+        )
+
+    os.environ["CGAN_LOCAL_CONFIG"] = local_config_path
+    os.environ["CGAN_CROP_TO_BOUNDS"] = str(setup_params["DATA"]["crop_to_bounds"])
+    os.environ["CGAN_BOUNDS"] = ",".join(str(x) for x in setup_params["DATA"]["bounds"])
+
+    print(f"Experiment config: {os.path.abspath(args.config)}")
+    print(f"Local config:      {local_config_path}")
+
+    # ONLY NOW import modules that ultimately import read_config
+    import data
+    import evaluation
+    import plots
+    import read_config
+    import setupdata
+    import setupmodel
+    import train
+
+    read_config.set_gpu_mode()  # set up whether to use GPU, and mem alloc mode
+    df_dict = read_config.read_downscaling_factor()  # read downscaling params
 
     if args.evaluate and args.evalnum is None:
         raise RuntimeError("You asked for evaluation to occur, but did not pass in '--eval_full', '--eval_short', or '--eval_blitz' to specify length of evaluation")

@@ -19,6 +19,7 @@ def setup_batch_gen(train_years,
 
 
 def setup_full_image_dataset(years,
+                             leadtime=30,
                              batch_size=1,
                              autocoarsen=False):
 
@@ -28,6 +29,7 @@ def setup_full_image_dataset(years,
     dates = get_dates(years, start_hour=6, end_hour=6)
     data_full = DataGeneratorFull(dates=dates,
                                   fcst_fields=all_fcst_fields,
+                                  leadtime=leadtime,
                                   start_hour=6,
                                   end_hour=6,
                                   batch_size=batch_size,
@@ -41,6 +43,7 @@ def setup_full_image_dataset(years,
 
 def setup_data(train_years=None,
                val_years=None,
+               leadtime=30,
                autocoarsen=False,
                weights=None,
                batch_size=None):
@@ -53,6 +56,7 @@ def setup_data(train_years=None,
 
     data_gen_valid = None if val_years is None \
         else setup_full_image_dataset(val_years,
+                                      leadtime=leadtime,
                                       autocoarsen=autocoarsen)
 
     gc.collect()

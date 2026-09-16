@@ -15,16 +15,6 @@ FCST_PATH = data_paths["GENERAL"]["FORECAST_PATH"]
 CONSTANTS_PATH = data_paths["GENERAL"]["CONSTANTS_PATH"]
 NORMALISATION_PATH = data_paths["GENERAL"]["NORMALISATION_PATH"]
 
-#MW: lits of all fields to read in
-# all_fcst_fields = ['cape', 'cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp', 'u700', 'v700']
-# accumulated_fields = ['cp', 'ssr', 'tp']
-# nonnegative_fields = ['cape', 'cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp'] #MW: things that can't be below 0
-
-#Without CAPE
-all_fcst_fields = ['cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp', 'u700', 'v700']
-accumulated_fields = ['cp', 'ssr', 'tp']
-nonnegative_fields = ['cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp'] #MW: things that can't be below 0
-
 HOURS = 6  #6 hour data
 
 crop_to_bounds = (
@@ -38,6 +28,22 @@ if bounds_str is not None:
     bounds = [float(x) for x in bounds_str.split(",")]
 else:
     bounds = None
+
+all_fcst_fields = (
+    os.environ.get("CGAN_ALL_FCST_FIELDS", "False").lower()
+    == "true"
+)
+
+accumulated_fields = (
+    os.environ.get("CGAN_ACCUMULATED_FIELDS", "False").lower()
+    == "true"
+)
+
+nonnegative_fields = (
+    os.environ.get("CGAN_NONNEGATIVE_FIELDS", "False").lower()
+    == "true"
+)
+
 
 # utility function; generator to iterate over a range of dates
 def daterange(start_date, end_date):
@@ -221,7 +227,7 @@ def load_fcst_truth_batch(dates_batch,
 
     for time_idx, date in zip(time_idx_batch, dates_batch):
         batch_x.append(load_fcst_stack(fcst_fields, date, leadtime=leadtime, log_precip=log_precip, norm=norm, fcst_norm_dict=fcst_norm_dict))
-        truth, mask = load_truth_and_mask(date, time_idx, leadtime=leadtime, log_precip=log_precip)
+        truth, mask = load_truth_and_mask(date, leadtime=leadtime, log_precip=log_precip)
         batch_y.append(truth)
         batch_mask.append(mask)
 
@@ -317,7 +323,7 @@ def load_fcst(field,
         # forecast data from one of the training years
         if norm_dict is None:
             raise RuntimeError("Forecast normalisation dictionary has not been loaded")
-        if field in ["mcc"]:
+        if field in ["mcc", "tcc"]:
             # already 0-1
             return data
         elif field in ["sp", "t2m"]:

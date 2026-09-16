@@ -17,3 +17,13 @@ ENACT_RAW:
         
     TFRecords:
         tfrecords_path: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/new/tfrecords_enact_raw'
+
+ZAM_MAD_HIND:
+    GENERAL:
+        TRUTH_PATH: '/network/group/aopp/predict/AWH024_COOPERNATH_IFS/IFS/IFS-Zambia/IMERG_daily'
+        FORECAST_PATH: '/network/group/aopp/predict/AWH024_COOPERNATH_IFS/IFS/IFS-Zambia/hindcasts'
+        CONSTANTS_PATH: '/network/group/aopp/predict/AWH024_COOPERNATH_IFS/IFS/IFS-Zambia/constants'
+        NORMALISATION_PATH: '/network/group/aopp/predict/AWH024_COOPERNATH_IFS/IFS/IFS-Zambia/hindcasts/fcst_norm'
+
+    TFRecords:
+        tfrecords_path: '/network/group/aopp/predict/AWH024_COOPERNATH_IFS/IFS/IFS-Zambia/tfrecords' 

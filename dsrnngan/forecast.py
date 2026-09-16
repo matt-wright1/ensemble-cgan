@@ -21,9 +21,6 @@ import netCDF4 as nc
 import numpy as np
 from tensorflow.keras.utils import Progbar
 
-#Change these forecast dates
-start_date = date(2023, 11, 28)
-end_date   = date(2025, 12, 31)
 log_precip = True
 
 # Open and parse forecast.yaml
@@ -86,7 +83,6 @@ downscaling_steps = read_config.read_downscaling_factor()["steps"]
 
 model_folder = fcst_params["MODEL"]["folder"]
 checkpoint = fcst_params["MODEL"]["checkpoint"]
-include_cape = fcst_params["MODEL"]["include_cape"]
 fcst_input_folder = fcst_params["INPUT"]["fcst_folder"]
 truth_input_folder = fcst_params["INPUT"]["truth_folder"]
 constants_folder = fcst_params["INPUT"]["constants_folder"]
@@ -94,20 +90,18 @@ normalisation_folder = fcst_params["INPUT"]["normalisation_folder"]
 output_folder = fcst_params["OUTPUT"]["folder"]
 ensemble_members = fcst_params["OUTPUT"]["ensemble_members"]
 save_crps_only = fcst_params["OUTPUT"]["save_crps_only"]
-leadtime = fcst_params["LEADTIME"]["leadtime"]
+leadtime = fcst_params["MODEL"]["leadtime"]
+start_date_in = fcst_params["OUTPUT"]["start_date"]
+end_date_in = fcst_params["OUTPUT"]["end_date"]
+all_fcst_fields = fcst_params["DATA"]["all_fcst_fields"]
+accumulated_fields = fcst_params["DATA"]["accumulated_fields"]
+nonnegative_fields = fcst_params["DATA"]["nonnegative_fields"]
 
 local_fcst_norm = load_fcst_norm(year=2018, normalisation_path=normalisation_folder)
 assert local_fcst_norm is not None
 
-#Set up fcst_fields --     # needed for now as Fenwick only has 13 variables
-if include_cape:
-    all_fcst_fields = ['cape', 'cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp', 'u700', 'v700']
-    accumulated_fields = ['cp', 'ssr', 'tp']
-    nonnegative_fields = ['cape', 'cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp'] #MW: things that can't be below 0
-else:
-    all_fcst_fields = ['cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp', 'u700', 'v700']
-    accumulated_fields = ['cp', 'ssr', 'tp']
-    nonnegative_fields = ['cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp'] #MW: things that can't be below 0
+start_date = date(start_date_in[0], start_date_in[1], start_date_in[2])
+end_date = date(end_date_in[0], end_date_in[1], end_date_in[2])
 
 # Open and parse GAN config file
 config_path = os.path.join(model_folder, "setup_params.yaml")
@@ -124,7 +118,7 @@ filters_gen = setup_params["GENERATOR"]["filters_gen"]
 noise_channels = setup_params["GENERATOR"]["noise_channels"]
 latent_variables = setup_params["GENERATOR"]["latent_variables"]
 filters_disc = setup_params["DISCRIMINATOR"]["filters_disc"]
-# TODO: avoid setting up discriminator in forecast mode?
+
 constant_fields = 2
 
 assert mode == "GAN", "standalone forecast script only for GAN, not VAE-GAN or deterministic model"
@@ -313,7 +307,7 @@ for d in iter_dates(start_date, end_date):
         ens_cgan_preds_stacked = np.stack(ens_cgan_preds, axis=0)
 
         #load relevant truth data
-        truth_data, _ = load_truth_and_mask(d.strftime('%Y%m%d'), 0, log_precip=log_precip, truth_path=truth_input_folder)
+        truth_data, _ = load_truth_and_mask(d.strftime('%Y%m%d'), leadtime=leadtime, log_precip=log_precip, truth_path=truth_input_folder)
         print(f"shape truth = {np.shape(truth_data)}")
         print(f"shape ens_cgan_preds_stacked = {np.shape(ens_cgan_preds_stacked)}")
         crps = ps.crps_ensemble(

@@ -100,8 +100,8 @@ nonnegative_fields = fcst_params["DATA"]["nonnegative_fields"]
 local_fcst_norm = load_fcst_norm(year=2018, normalisation_path=normalisation_folder)
 assert local_fcst_norm is not None
 
-start_date = date(start_date_in[0], start_date_in[1], start_date_in[2])
-end_date = date(end_date_in[0], end_date_in[1], end_date_in[2])
+start_date = date(start_date_in[2], start_date_in[1], start_date_in[0])
+end_date = date(end_date_in[2], end_date_in[1], end_date_in[0])
 
 # Open and parse GAN config file
 config_path = os.path.join(model_folder, "setup_params.yaml")

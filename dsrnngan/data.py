@@ -26,7 +26,6 @@ accumulated_fields = ['cp', 'ssr', 'tp']
 nonnegative_fields = ['cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp'] #MW: things that can't be below 0
 
 HOURS = 6  #6 hour data
-LEADTIME = 30 #Should be multiple of 24 + 6 hours (30, 54, 78, 102, 126, 150, 174)
 
 crop_to_bounds = (
     os.environ.get("CGAN_CROP_TO_BOUNDS", "False").lower()
@@ -115,7 +114,7 @@ def get_dates(year,
 #MW: truth = truth data; mask = region of interest (true within region)
 #MW: needs changing if data source changes
 def load_truth_and_mask(date,
-                        time_idx,
+                        leadtime=30,
                         log_precip=False,
                         truth_path=TRUTH_PATH):
     '''
@@ -127,7 +126,7 @@ def load_truth_and_mask(date,
     '''
     # convert date and time_idx to get the correct truth file
     fcst_date = datetime.datetime.strptime(date, "%Y%m%d")
-    valid_dt = fcst_date + datetime.timedelta(hours=LEADTIME)  #MW: changed from HOURS to LEADTIME
+    valid_dt = fcst_date + datetime.timedelta(hours=leadtime)
     year = str(valid_dt.year)
     fname = valid_dt.strftime('%Y%m%d_%H')
     data_path = os.path.join(truth_path, f"{year}/{fname}.nc")
@@ -202,6 +201,7 @@ def load_hires_constants(batch_size=1, constants_path=CONSTANTS_PATH):
 def load_fcst_truth_batch(dates_batch,
                           time_idx_batch,
                           fcst_fields=all_fcst_fields,
+                          leadtime=30,
                           log_precip=False,
                           norm=False,
                           fcst_norm_dict=None
@@ -220,8 +220,8 @@ def load_fcst_truth_batch(dates_batch,
     batch_mask = []  # mask
 
     for time_idx, date in zip(time_idx_batch, dates_batch):
-        batch_x.append(load_fcst_stack(fcst_fields, date, time_idx, log_precip=log_precip, norm=norm, fcst_norm_dict=fcst_norm_dict))
-        truth, mask = load_truth_and_mask(date, time_idx, log_precip=log_precip)
+        batch_x.append(load_fcst_stack(fcst_fields, date, leadtime=leadtime, log_precip=log_precip, norm=norm, fcst_norm_dict=fcst_norm_dict))
+        truth, mask = load_truth_and_mask(date, time_idx, leadtime=leadtime, log_precip=log_precip)
         batch_y.append(truth)
         batch_mask.append(mask)
 
@@ -230,7 +230,7 @@ def load_fcst_truth_batch(dates_batch,
 #MW: loads s2s data; needs changing if data source changes
 def load_fcst(field,
               date,
-              time_idx,
+              leadtime=30,
               log_precip=False,
               norm=False,
               fcst_path=FCST_PATH,
@@ -279,7 +279,7 @@ def load_fcst(field,
     fcst_date = datetime.datetime.strptime(date, "%Y%m%d").date()
     fcst_idx = fcst_date.toordinal() - datetime.date(year, 1, 1).toordinal()
 
-    lead_idx1 = int(LEADTIME/HOURS)
+    lead_idx1 = int(leadtime/HOURS)
     lead_idx2 = int(lead_idx1 + 4) if field in accumulated_fields else int(lead_idx1 + 5)
 
     if field in accumulated_fields:
@@ -336,7 +336,7 @@ def load_fcst(field,
 
 def load_fcst_stack(fields,
                     date,
-                    time_idx,
+                    leadtime=30,
                     log_precip=False,
                     norm=False,
                     fcst_norm_dict=None):
@@ -347,11 +347,11 @@ def load_fcst_stack(fields,
     '''
     field_arrays = []
     for f in fields:
-        field_arrays.append(load_fcst(f, date, time_idx, log_precip=log_precip, norm=norm, fcst_norm_dict=fcst_norm_dict))
+        field_arrays.append(load_fcst(f, date, leadtime=leadtime, log_precip=log_precip, norm=norm, fcst_norm_dict=fcst_norm_dict))
     return np.concatenate(field_arrays, axis=-1)
 
 
-def get_fcst_stats_slow(field, year=2018):
+def get_fcst_stats_slow(field, leadtime=30, year=2018):
     '''
     Calculates and returns min, max, mean, std per field,
     which can be used to generate normalisation parameters.
@@ -368,7 +368,7 @@ def get_fcst_stats_slow(field, year=2018):
     nsamples = 0
     for datestr in dates:
         for time_idx in range(28):
-            data = load_fcst(field, datestr, time_idx)[:, :, 0]
+            data = load_fcst(field, datestr, time_idx, leadtime=leadtime)[:, :, 0]
             mi = min(mi, data.min())
             mx = max(mx, data.max())
             dsum += np.mean(data)

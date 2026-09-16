@@ -262,7 +262,7 @@ for d in iter_dates(start_date, end_date):
         # forecast data is stored.  TODO: unify the data normalisation between these?
         field_arrays = []
         for field in all_fcst_fields:
-            data = load_fcst(field, d.strftime('%Y%m%d'), 0, log_precip=log_precip, norm=True, fcst_path=fcst_input_folder, fcst_norm_dict=local_fcst_norm)
+            data = load_fcst(field, d.strftime('%Y%m%d'), 0, leadtime=leadtime, log_precip=log_precip, norm=True, fcst_path=fcst_input_folder, fcst_norm_dict=local_fcst_norm)
             field_arrays.append(data)
 
         # for j, field in enumerate(all_fcst_fields):

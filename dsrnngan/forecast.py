@@ -74,7 +74,7 @@ print(f"Experiment config: {os.path.abspath(args.config_file)}")
 print(f"Local config:      {local_config_path}")
 
 #Imports
-from data import HOURS, LEADTIME, all_fcst_fields, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm, crop_to_bounds, bounds, ForecastDataUnavailable
+from data import HOURS, all_fcst_fields, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm, crop_to_bounds, bounds, ForecastDataUnavailable
 import read_config
 from noise import NoiseGenerator
 from setupmodel import setup_model
@@ -94,6 +94,7 @@ normalisation_folder = fcst_params["INPUT"]["normalisation_folder"]
 output_folder = fcst_params["OUTPUT"]["folder"]
 ensemble_members = fcst_params["OUTPUT"]["ensemble_members"]
 save_crps_only = fcst_params["OUTPUT"]["save_crps_only"]
+leadtime = fcst_params["LEADTIME"]["leadtime"]
 
 local_fcst_norm = load_fcst_norm(year=2018, normalisation_path=normalisation_folder)
 assert local_fcst_norm is not None
@@ -266,7 +267,7 @@ for d in iter_dates(start_date, end_date):
     fcst_idx = d.toordinal() - date(d.year, 1, 1).toordinal()
     netcdf_dict["time_data"][0] = start_times[fcst_idx]
 
-    valid_time_idx = ([int(LEADTIME/HOURS)],) #for 1x24h forecast with lead time LEADTIME
+    valid_time_idx = ([int(leadtime/HOURS)],) #for 1x24h forecast with lead time LEADTIME
     valid_times_forecast = valid_times[fcst_idx, valid_time_idx]
     print(np.shape(valid_times_forecast))
     netcdf_dict["valid_time_data"][0,:] = valid_times_forecast
@@ -279,8 +280,8 @@ for d in iter_dates(start_date, end_date):
         # forecast data is stored.  TODO: unify the data normalisation between these?
         field_arrays = []
         for field in all_fcst_fields:
-            data = load_fcst(field, d.strftime('%Y%m%d'), 0, log_precip=log_precip, norm=True, fcst_path=fcst_input_folder, fcst_norm_dict=local_fcst_norm)
-            field_arrays.append(data)
+            data = load_fcst(field, d.strftime('%Y%m%d'), 0, leadtime=leadtime, log_precip=log_precip, norm=True, fcst_path=fcst_input_folder, fcst_norm_dict=local_fcst_norm)
+            field_arrays.append(data) #TO DO in line above -- alter leadtime logic
 
         # for j, field in enumerate(all_fcst_fields):
         #     arr = field_arrays[j]

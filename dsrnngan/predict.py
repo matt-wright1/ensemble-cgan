@@ -80,6 +80,7 @@ with open(config_path, 'r') as f:
 mode = setup_params["GENERAL"]["mode"]
 arch = setup_params["MODEL"]["architecture"]
 padding = setup_params["MODEL"]["padding"]
+leadtime = setup_params["LEADTIME"]["leadtime"]
 problem_type = setup_params["GENERAL"]["problem_type"]
 filters_gen = setup_params["GENERATOR"]["filters_gen"]
 noise_channels = setup_params["GENERATOR"]["noise_channels"]
@@ -104,6 +105,7 @@ input_channels = 4*len(all_fcst_fields)
 # load appropriate dataset
 data_predict = DataGeneratorFull(dates=dates,
                                  fcst_fields=all_fcst_fields,
+                                 leadtime=leadtime,
                                  start_hour=6,
                                  end_hour=6,
                                  batch_size=batch_size,

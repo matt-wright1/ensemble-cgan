@@ -14,6 +14,7 @@ class DataGenerator(Sequence):
     DataGenerator(["20180409", "20200607"], fcst_fields=["cape", "tp"], start_hour=12, end_hour=24) will return data over two periods: 12-18 and 18-24 hours for the forecasts initialised on 20180409 and 20200607.
     '''
     def __init__(self, dates, fcst_fields,
+                 leadtime,
                  start_hour=6, end_hour=6,
                  batch_size=1, log_precip=True,
                  shuffle=True, constants=True, fcst_norm=True,
@@ -46,6 +47,7 @@ class DataGenerator(Sequence):
         assert autocoarsen is False  # untested, probably not useful in this project
 
         self.fcst_fields = fcst_fields
+        self.leadtime = leadtime
         self.batch_size = batch_size
         self.log_precip = log_precip
         self.shuffle = shuffle
@@ -98,6 +100,7 @@ class DataGenerator(Sequence):
         data_x_batch, data_y_batch, data_mask_batch = load_fcst_truth_batch(
             dates_batch,
             time_idx_batch,
+            leadtime=self.leadtime,
             fcst_fields=self.fcst_fields,
             log_precip=self.log_precip,
             norm=self.fcst_norm)

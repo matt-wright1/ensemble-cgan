@@ -36,6 +36,7 @@ def load_experiment_config(config_path):
 
 def generate_tfrecords(
         years,
+        leadtime,
         write_data,
         read_config):
 
@@ -54,7 +55,7 @@ def generate_tfrecords(
 
         print(f"Writing {year}")
 
-        write_data(int(year))
+        write_data(int(year), leadtime=leadtime)
 
     # ------------------------------------------------------------
     # Inspect generated files
@@ -155,6 +156,7 @@ if __name__ == "__main__":
     # Select local config for THIS process
     # ------------------------------------------------------------
 
+    leadtime = config["LEADTIME"]["leadtime"]
     local_config_path = config["GENERAL"]["local_config_path"]
 
     if not os.path.isabs(local_config_path):
@@ -186,6 +188,7 @@ if __name__ == "__main__":
 
     generate_tfrecords(
         years=args.years,
+        leadtime=leadtime,
         write_data=write_data,
         read_config=read_config,
     )

@@ -2,6 +2,7 @@
 import os
 import datetime
 import pickle
+import json
 
 import numpy as np
 import netCDF4 as nc
@@ -29,21 +30,17 @@ if bounds_str is not None:
 else:
     bounds = None
 
-all_fcst_fields = (
-    os.environ.get("CGAN_ALL_FCST_FIELDS", "False").lower()
-    == "true"
+all_fcst_fields = json.loads(
+    os.environ.get("CGAN_ALL_FCST_FIELDS", "[]")
 )
 
-accumulated_fields = (
-    os.environ.get("CGAN_ACCUMULATED_FIELDS", "False").lower()
-    == "true"
+accumulated_fields = json.loads(
+    os.environ.get("CGAN_ACCUMULATED_FIELDS", "[]")
 )
 
-nonnegative_fields = (
-    os.environ.get("CGAN_NONNEGATIVE_FIELDS", "False").lower()
-    == "true"
+nonnegative_fields = json.loads(
+    os.environ.get("CGAN_NONNEGATIVE_FIELDS", "[]")
 )
-
 
 # utility function; generator to iterate over a range of dates
 def daterange(start_date, end_date):
@@ -81,7 +78,7 @@ def get_dates(year,
         end_hour (int): Lead time of last forecast desired
     '''
     # sanity checks for our dataset
-    assert year in (2018, 2019, 2020, 2021)
+    # assert year in (2018, 2019, 2020, 2021)
     assert start_hour >= 0
     assert end_hour <= 168
     assert start_hour % HOURS == 0
@@ -281,9 +278,34 @@ def load_fcst(field,
             lat_slice = slice(lat_idx[0], lat_idx[-1] + 1)
             lon_slice = slice(lon_idx[0], lon_idx[-1] + 1)
 
-    # calculate first index (i.e., day of year, with Jan 1 = 0)
-    fcst_date = datetime.datetime.strptime(date, "%Y%m%d").date()
-    fcst_idx = fcst_date.toordinal() - datetime.date(year, 1, 1).toordinal()
+    # Find this date's actual index in THIS field's NetCDF file.
+    # Different forecast fields may contain different sets of dates.
+    time_var = nc_file.variables["time"]
+
+    times = nc.num2date(
+        time_var[:],
+        units=time_var.units,
+        calendar=getattr(time_var, "calendar", "standard")
+    )
+
+    target_date = datetime.datetime.strptime(date, "%Y%m%d").date()
+
+    matches = [
+        i for i, t in enumerate(times)
+        if t.year == target_date.year
+        and t.month == target_date.month
+        and t.day == target_date.day
+    ]
+
+    if not matches:
+        nc_file.close()
+        raise FileNotFoundError(
+            f"No forecast date {date} for field {field}"
+        )
+
+    fcst_idx = matches[0]
+    #Check that new time_idx logic is workign as intended
+    # print(f"{field}: requested={date}, index={fcst_idx}, actual={times[fcst_idx]}")
 
     lead_idx1 = int(leadtime/HOURS)
     lead_idx2 = int(lead_idx1 + 4) if field in accumulated_fields else int(lead_idx1 + 5)
@@ -374,7 +396,7 @@ def get_fcst_stats_slow(field, leadtime=30, year=2018):
     nsamples = 0
     for datestr in dates:
         for time_idx in range(28):
-            data = load_fcst(field, datestr, time_idx, leadtime=leadtime)[:, :, 0]
+            data = load_fcst(field, datestr, leadtime=leadtime)[:, :, 0]
             mi = min(mi, data.min())
             mx = max(mx, data.max())
             dsum += np.mean(data)

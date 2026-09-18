@@ -1,6 +1,7 @@
 import argparse
 import glob
 import os
+import json
 
 import tensorflow as tf
 import yaml
@@ -150,6 +151,30 @@ if __name__ == "__main__":
 
     os.environ["CGAN_BOUNDS"] = ",".join(
         str(x) for x in config["DATA"]["bounds"]
+    )
+
+    os.environ["CGAN_ALL_FCST_FIELDS"] = json.dumps(
+        config["DATA"]["all_fcst_fields"]
+    )
+
+    os.environ["CGAN_ACCUMULATED_FIELDS"] = json.dumps(
+        config["DATA"]["accumulated_fields"]
+    )
+
+    os.environ["CGAN_NONNEGATIVE_FIELDS"] = json.dumps(
+        config["DATA"]["nonnegative_fields"]
+    )
+
+    all_fcst_fields = json.loads(
+        os.environ.get("CGAN_ALL_FCST_FIELDS", "[]")
+    )
+
+    accumulated_fields = json.loads(
+        os.environ.get("CGAN_ACCUMULATED_FIELDS", "[]")
+    )
+
+    nonnegative_fields = json.loads(
+        os.environ.get("CGAN_NONNEGATIVE_FIELDS", "[]")
     )
 
     # ------------------------------------------------------------

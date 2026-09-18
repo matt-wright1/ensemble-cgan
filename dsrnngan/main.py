@@ -57,9 +57,17 @@ if __name__ == "__main__":
     os.environ["CGAN_CROP_TO_BOUNDS"] = str(setup_params["DATA"]["crop_to_bounds"])
     os.environ["CGAN_BOUNDS"] = ",".join(str(x) for x in setup_params["DATA"]["bounds"])
 
-    os.environ["CGAN_ALL_FCST_FIELDS"] = setup_params["DATA"]["all_fcst_fields"]
-    os.environ["CGAN_ACCUMULATED_FIELDS"] = setup_params["DATA"]["accumulated_fields"]
-    os.environ["CGAN_NONNEGATIVE_FIELDS"] = setup_params["DATA"]["nonnegative_fields"]
+    os.environ["CGAN_ALL_FCST_FIELDS"] = json.dumps(
+        setup_params["DATA"]["all_fcst_fields"]
+    )
+
+    os.environ["CGAN_ACCUMULATED_FIELDS"] = json.dumps(
+        setup_params["DATA"]["accumulated_fields"]
+    )
+
+    os.environ["CGAN_NONNEGATIVE_FIELDS"] = json.dumps(
+        setup_params["DATA"]["nonnegative_fields"]
+    )
 
     print(f"Experiment config: {os.path.abspath(args.config)}")
     print(f"Local config:      {local_config_path}")

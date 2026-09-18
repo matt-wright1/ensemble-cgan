@@ -281,9 +281,14 @@ def write_data(year,
                     # some of the truth data is invalid, so don't use this subsample
                     continue
 
-                truth = sample[1]['output'][0,
-                                            idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
-                                            idw*scaling_factor:(idw+img_chunk_width)*scaling_factor].flatten()
+                if sample[1]['output'].ndim == 4:
+                    truth = sample[1]['output'][0, 0,
+                                                idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
+                                                idw*scaling_factor:(idw+img_chunk_width)*scaling_factor].flatten()
+                else:
+                    truth = sample[1]['output'][0,
+                                                idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
+                                                idw*scaling_factor:(idw+img_chunk_width)*scaling_factor].flatten()
                 const = sample[0]['hi_res_inputs'][0,
                                                    idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
                                                    idw*scaling_factor:(idw+img_chunk_width)*scaling_factor,
@@ -301,6 +306,8 @@ def write_data(year,
                 example = tf.train.Example(features=features)
                 example_to_string = example.SerializeToString()
 
+                if truth.size == 0:
+                    print(f"EMPTY: batch={batch}, ii={ii}, idh={idh}, idw={idw}, truth_full={sample[1]['output'].shape}, chunk={img_chunk_width}")
                 # decide which bin to put this sample in
                 truth_raw = denormalise(truth)  # undo log10(1+x) transformation
                 truth_mean = truth_raw.mean()

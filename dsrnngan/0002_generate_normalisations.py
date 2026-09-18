@@ -1,7 +1,7 @@
 import argparse
 import os
 import yaml
-
+import json
 
 # ------------------------------------------------------------
 # Parse command-line arguments
@@ -39,6 +39,18 @@ os.environ["CGAN_CROP_TO_BOUNDS"] = str(
 
 os.environ["CGAN_BOUNDS"] = ",".join(
     str(x) for x in setup_params["DATA"]["bounds"]
+)
+
+os.environ["CGAN_ALL_FCST_FIELDS"] = json.dumps(
+    setup_params["DATA"]["all_fcst_fields"]
+)
+
+os.environ["CGAN_ACCUMULATED_FIELDS"] = json.dumps(
+    setup_params["DATA"]["accumulated_fields"]
+)
+
+os.environ["CGAN_NONNEGATIVE_FIELDS"] = json.dumps(
+    setup_params["DATA"]["nonnegative_fields"]
 )
 
 

@@ -1,9 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-
-# Same as forecast.py, but the date to process is given as a command line argument
-
 # Big warning:
 # This is not a general-purpose forecast script.
 # This is for forecasting on the pre-defined 'ICPAC region' (e.g., the latitudes
@@ -24,21 +21,10 @@ import netCDF4 as nc
 import numpy as np
 from tensorflow.keras.utils import Progbar
 
-from data import HOURS, LEADTIME, all_fcst_fields, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm, crop_to_bounds, bounds, ForecastDataUnavailable
-import read_config
-from noise import NoiseGenerator
-from setupmodel import setup_model
-
-
 #Change these forecast dates
-start_date = date(2024, 1, 1)
-end_date   = date(2024, 5, 31)
+start_date = date(2023, 11, 28)
+end_date   = date(2025, 12, 31)
 log_precip = True
-
-# Some setup
-read_config.set_gpu_mode()  # set up whether to use GPU, and mem alloc mode
-data_paths = read_config.get_data_paths()  # need the constants directory
-downscaling_steps = read_config.read_downscaling_factor()["steps"]
 
 # Open and parse forecast.yaml
 parser = argparse.ArgumentParser()
@@ -52,7 +38,7 @@ parser.add_argument(
     "config_file",
     nargs="?",
     default="config.yaml",
-    help="Path to forecast configuration YAML file."
+    help="Path to configuration YAML file."
 )
 args = parser.parse_args()
 
@@ -68,6 +54,35 @@ with open(args.config_file, "r") as f:
     except yaml.YAMLError as exc:
         print(exc)
         raise
+
+# ------------------------------------------------------------
+# Select local config for this process
+# ------------------------------------------------------------
+
+local_config_path = setup_params["GENERAL"]["local_config_path"]
+
+# Resolve relative to experiment config file
+if not os.path.isabs(local_config_path):
+    local_config_path = os.path.join(
+        os.path.dirname(os.path.abspath(args.config_file)),
+        local_config_path,
+    )
+
+os.environ["CGAN_LOCAL_CONFIG"] = local_config_path
+
+print(f"Experiment config: {os.path.abspath(args.config_file)}")
+print(f"Local config:      {local_config_path}")
+
+#Imports
+from data import HOURS, LEADTIME, all_fcst_fields, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm, crop_to_bounds, bounds, ForecastDataUnavailable
+import read_config
+from noise import NoiseGenerator
+from setupmodel import setup_model
+
+# Setup
+read_config.set_gpu_mode()  # set up whether to use GPU, and mem alloc mode
+data_paths = read_config.get_data_paths()  # need the constants directory
+downscaling_steps = read_config.read_downscaling_factor()["steps"]
 
 model_folder = fcst_params["MODEL"]["folder"]
 checkpoint = fcst_params["MODEL"]["checkpoint"]

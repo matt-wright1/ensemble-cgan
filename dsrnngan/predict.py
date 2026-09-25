@@ -80,7 +80,8 @@ with open(config_path, 'r') as f:
 mode = setup_params["GENERAL"]["mode"]
 arch = setup_params["MODEL"]["architecture"]
 padding = setup_params["MODEL"]["padding"]
-leadtime = setup_params["LEADTIME"]["leadtime"]
+leadtime = setup_params["DATA"]["leadtime"]
+accumulation = setup_params["DATA"]["accumulation"]
 problem_type = setup_params["GENERAL"]["problem_type"]
 filters_gen = setup_params["GENERATOR"]["filters_gen"]
 noise_channels = setup_params["GENERATOR"]["noise_channels"]
@@ -94,20 +95,19 @@ data_paths = read_config.get_data_paths()
 batch_size = 1
 
 weights_fn = os.path.join(log_folder, 'models', f'gen_weights-{model_number:07}.h5')
-dates = get_dates(predict_year, start_hour=6, end_hour=6)
+dates = get_dates(predict_year, leadtime=leadtime, accumulation=accumulation)
 
 assert problem_type == "normal"  # removed autocoarsen from this script
 
 autocoarsen = False
 plot_input_title = 'Forecast'
-input_channels = 4*len(all_fcst_fields)
+input_channels = 2*len(all_fcst_fields)
 
 # load appropriate dataset
 data_predict = DataGeneratorFull(dates=dates,
                                  fcst_fields=all_fcst_fields,
                                  leadtime=leadtime,
-                                 start_hour=6,
-                                 end_hour=6,
+                                 accumulation=accumulation,
                                  batch_size=batch_size,
                                  log_precip=True,
                                  shuffle=True,
@@ -141,22 +141,20 @@ gen.load_weights(weights_fn)
 #                                     shuffle=True,
 #                                     fcst_norm=False)
 
-tpidx_mean = 4*all_fcst_fields.index('tp')  # 4*idx is tp ens mean,
-tpidx_stdev = 4*all_fcst_fields.index('tp') + 1  # 4*idx+1 is tp ens stdev
+tpidx_mean = 2*all_fcst_fields.index('tp')  # 2*idx is tp ens mean,
+tpidx_stdev = 2*all_fcst_fields.index('tp') + 1  # 2*idx+1 is tp ens stdev
 
 pred = []
 seq_real = []
 seq_cond = []
 seq_const = []
 dates_save = []
-hours_save = []
 data_predict_iter = iter(data_predict)
 
 for ii in range(num_samples):
     inputs, outputs = next(data_predict_iter)
 
     dates_save.append(data_predict.dates[ii])
-    hours_save.append(data_predict.time_idxs[ii])
 
     # store denormalised inputs, outputs, predictions
     seq_const.append(inputs['hi_res_inputs'])
@@ -237,10 +235,20 @@ for ii in range(num_samples):
     cbs = []
 
     plt.figure(figsize=(8, 7), dpi=200)
-    # calculate forecast date and valid time, for plot title
-    fcst_date = datetime.datetime.strptime(dates_save[ii], "%Y%m%d")
-    valid_dt = fcst_date + datetime.timedelta(hours=int(hours_save[ii])*data.HOURS)  # needs to change for 12Z forecasts
-    title = f"Forecast {dates_save[ii]}, valid starting {valid_dt.strftime('%Y%m%d %H')}Z"
+    fcst_date = datetime.datetime.strptime(
+        dates_save[ii],
+        "%Y%m%d"
+    )
+
+    target_start_dt = fcst_date + datetime.timedelta(
+        hours=leadtime
+    )
+
+    title = (
+        f"Forecast {dates_save[ii]}, "
+        f"valid starting "
+        f"{target_start_dt.strftime('%Y%m%d %H')}Z"
+    )
     plt.suptitle(title, fontsize=16)
 
     # set up sub-plots
@@ -345,7 +353,8 @@ if args.plot_all:
         tmp['TRUTH'] = np.maximum(seq_real[ii][0, ..., 0], 1e-6)
         tmp["Forecast"] = np.maximum(seq_cond[ii][0, ..., tpidx_mean], 1e-6)
         tmp['dates'] = dates_save[ii]
-        tmp['time_idxs'] = hours_save[ii]
+        tmp['leadtime'] = leadtime
+        tmp['accumulation'] = accumulation
         for jj in range(pred_ensemble_size):
             tmp[f"{mode} pred {jj+1}"] = np.maximum(pred[ii][jj][0, ..., 0], 1e-6)
         sequences.append(tmp)
@@ -377,7 +386,24 @@ if args.plot_all:
                                     extent=extent,
                                     alpha=alpha)
             if ii == 0:
-                title = dates_save[kk][:4] + '-' + dates_save[kk][4:6] + '-' + dates_save[kk][6:8] + ' ' + str(hours_save[kk]) + ' time period'
+                fcst_date = datetime.datetime.strptime(
+                    dates_save[kk],
+                    "%Y%m%d"
+                )
+
+                target_start_dt = fcst_date + datetime.timedelta(
+                    hours=leadtime
+                )
+
+                target_end_dt = target_start_dt + datetime.timedelta(
+                    hours=accumulation
+                )
+
+                title = (
+                    f"{target_start_dt.strftime('%Y-%m-%d %H')}Z–"
+                    f"{target_end_dt.strftime('%Y-%m-%d %H')}Z"
+                )
+
                 plt.title(title, fontsize=9)
 
             if kk == 0:

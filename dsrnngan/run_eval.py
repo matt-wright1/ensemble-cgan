@@ -35,6 +35,8 @@ noise_factor = setup_params["EVAL"]["postprocessing_noise_factor"]
 noise_factor = float(noise_factor)
 max_pooling = setup_params["EVAL"]["max_pooling"]
 avg_pooling = setup_params["EVAL"]["avg_pooling"]
+leadtime = setup_params["DATA"]["leadtime"]
+accumulation = setup_params["DATA"]["accumulation"]
 constant_fields = 2
 num_images = 256
 
@@ -70,4 +72,6 @@ evaluation.evaluate_multiple_checkpoints(mode=mode,
                                          latent_variables=latent_variables,
                                          noise_channels=noise_channels,
                                          padding=padding,
-                                         ensemble_size=ensemble_size)
+                                         ensemble_size=ensemble_size,
+                                         leadtime=leadtime,
+                                         accumulation=accumulation)

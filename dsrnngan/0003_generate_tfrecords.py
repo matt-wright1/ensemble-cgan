@@ -38,6 +38,7 @@ def load_experiment_config(config_path):
 def generate_tfrecords(
         years,
         leadtime,
+        accumulation,
         write_data,
         read_config):
 
@@ -56,7 +57,7 @@ def generate_tfrecords(
 
         print(f"Writing {year}")
 
-        write_data(int(year), leadtime=leadtime)
+        write_data(int(year), leadtime=leadtime, accumulation=accumulation)
 
     # ------------------------------------------------------------
     # Inspect generated files
@@ -181,8 +182,22 @@ if __name__ == "__main__":
     # Select local config for THIS process
     # ------------------------------------------------------------
 
-    leadtime = config["LEADTIME"]["leadtime"]
+    leadtime = config["DATA"]["leadtime"]
+    accumulation = config["DATA"]["accumulation"]
     local_config_path = config["GENERAL"]["local_config_path"]
+
+    if leadtime % 6 != 0:
+        raise ValueError(
+            f"leadtime must be a multiple of 6 hours, got {leadtime}"
+        )
+
+    if accumulation not in (6, 24):
+        raise ValueError(
+            f"accumulation must be 6 or 24 hours, got {accumulation}"
+        )
+
+    os.environ["LEADTIME"] = str(leadtime)
+    os.environ["ACCUMULATION"] = str(accumulation)
 
     if not os.path.isabs(local_config_path):
         local_config_path = os.path.join(
@@ -214,6 +229,7 @@ if __name__ == "__main__":
     generate_tfrecords(
         years=args.years,
         leadtime=leadtime,
+        accumulation=accumulation,
         write_data=write_data,
         read_config=read_config,
     )

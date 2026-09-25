@@ -8,14 +8,18 @@ import read_config
 
 
 class DataGenerator(Sequence):
-    '''
-    Data generator class that returns (forecast, constants, mask, truth) data. Class will return forecast data at the start and end of each interval (for non-accumulated fields) and accumulated fields over the interval.  The truth data is averaged over the interval.
+    """
+    Data generator that returns forecast, constants, mask and truth data.
 
-    DataGenerator(["20180409", "20200607"], fcst_fields=["cape", "tp"], start_hour=12, end_hour=24) will return data over two periods: 12-18 and 18-24 hours for the forecasts initialised on 20180409 and 20200607.
-    '''
+    `leadtime` denotes the START of the target interval.
+
+    For example:
+        leadtime=30, accumulation=6
+
+    corresponds to the +30 to +36 hour target interval.
+    """
     def __init__(self, dates, fcst_fields,
-                 leadtime,
-                 start_hour=6, end_hour=6,
+                 leadtime, accumulation,
                  batch_size=1, log_precip=True,
                  shuffle=True, constants=True, fcst_norm=True,
                  autocoarsen=False, seed=9999):
@@ -38,16 +42,18 @@ class DataGenerator(Sequence):
             seed (int): Random seed given to NumPy, used for repeatable shuffles
         '''
 
-        # sanity checks for our dataset
-        assert start_hour >= 0
-        assert end_hour <= 168
-        assert start_hour % HOURS == 0
-        assert end_hour % HOURS == 0
-        assert end_hour >= start_hour
-        assert autocoarsen is False  # untested, probably not useful in this project
+        assert leadtime >= 0
+        assert leadtime <= 168
+        assert leadtime % HOURS == 0
+
+        if accumulation not in (6, 24):
+            raise ValueError(
+                f"Unsupported accumulation period: {accumulation} hours"
+            )
 
         self.fcst_fields = fcst_fields
         self.leadtime = leadtime
+        self.accumulation = accumulation
         self.batch_size = batch_size
         self.log_precip = log_precip
         self.shuffle = shuffle
@@ -68,8 +74,6 @@ class DataGenerator(Sequence):
         # convert to numpy array for easy use of np.repeat
         temp_dates = np.array(dates)
 
-        # represent valid lead-time intervals, 0 = 0-6 hours, 1 = 6-12 hours, 2 = 12-18 hours etc
-        # temp_time_idxs = np.arange(start_hour//HOURS, end_hour//HOURS)
         temp_time_idxs = np.array([0])  # There is only one valid time in this set of forecasts
 
         # if no shuffle, the DataGenerator will return each interval from the
@@ -77,9 +81,10 @@ class DataGenerator(Sequence):
         self.dates = np.repeat(temp_dates, len(temp_time_idxs))
         self.time_idxs = np.tile(temp_time_idxs, len(temp_dates))
 
+        self.rng = np.random.default_rng(seed)
+
         if self.shuffle:
-            rng = np.random.default_rng(seed)
-            self.shuffle_data(rng)
+            self.shuffle_data(self.rng)
 
     def __len__(self):
         # Number of batches in dataset
@@ -101,6 +106,7 @@ class DataGenerator(Sequence):
             dates_batch,
             time_idx_batch,
             leadtime=self.leadtime,
+            accumulation=self.accumulation,
             fcst_fields=self.fcst_fields,
             log_precip=self.log_precip,
             norm=self.fcst_norm)
@@ -130,7 +136,7 @@ class DataGenerator(Sequence):
 
     def on_epoch_end(self):
         if self.shuffle:
-            self.shuffle_data()
+            self.shuffle_data(self.rng)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,6 @@ import xarray as xr
 import read_config
 from data import all_fcst_fields, denormalise, get_dates, HOURS, crop_to_bounds, bounds
 
-
 data_paths = read_config.get_data_paths()
 records_folder = data_paths["TFRecords"]["tfrecords_path"]
 truth_folder = Path(data_paths["GENERAL"]["TRUTH_PATH"])
@@ -212,6 +211,7 @@ def write_data(year,
                folder=records_folder,
                fcst_fields=all_fcst_fields,
                leadtime=30,
+               accumulation=24,
                img_chunk_width=DEFAULT_FCST_SHAPE[0],  # controls size of subsampled image
                num_class=CLASSES,
                log_precip=True,
@@ -231,99 +231,107 @@ def write_data(year,
     nsamples = img_size_h*img_size_w//(img_chunk_width**2)
     print("Samples per image:", nsamples)  # note, actual samples may be less than this if mask is used to exclude some
 
-    # split TFRecords by lead time, in case this is useful for training on subsets of lead time
-     # For 24h forecasts only use 1 lead time
-    for time_idx in range(1,2):
-        print(f"Doing time index {time_idx}")
-        s_hour = time_idx*HOURS #start hour
-        e_hour = s_hour
-        # e_hour = (time_idx + 1)*HOURS #end hour
-        dates = get_dates(year,
-                          start_hour=s_hour,
-                          end_hour=e_hour)
-        dgc = DataGeneratorFull(dates,
-                                fcst_fields=fcst_fields,
-                                leadtime=leadtime,
-                                start_hour=s_hour,
-                                end_hour=e_hour,
-                                batch_size=1,
-                                log_precip=log_precip,
-                                shuffle=False,
-                                constants=True,
-                                fcst_norm=fcst_norm)
+    # Get forecast initialisation dates for which the required truth exists.
+    # leadtime denotes the START of the target accumulation interval.
+    dates = get_dates(
+        year,
+        leadtime=leadtime,
+        accumulation=accumulation
+    )
 
-        fle_hdles = []
-        for fh in range(num_class):
-            flename = os.path.join(folder, f"{year}_{time_idx}.{fh}.tfrecords")
-            # compress generated TFRecords, courtesy Fenwick
-            options = tf.io.TFRecordOptions(compression_type="GZIP")
-            fle_hdles.append(tf.io.TFRecordWriter(flename, options=options))
+    print(
+        f"Generating {year}: "
+        f"leadtime={leadtime} h, "
+        f"accumulation={accumulation} h, "
+        f"dates={len(dates)}"
+    )
 
-        for batch in range(len(dgc)):
-            if (batch % 10) == 0:
-                print(time_idx, batch)
+    dgc = DataGeneratorFull(
+        dates,
+        fcst_fields=fcst_fields,
+        leadtime=leadtime,
+        accumulation=accumulation,
+        batch_size=1,
+        log_precip=log_precip,
+        shuffle=False,
+        constants=True,
+        fcst_norm=fcst_norm
+    )
 
-            try:
-                sample = dgc.__getitem__(batch)
-            except FileNotFoundError as e:
-                print(f"Skipping batch {batch} because source file is missing: {e}")
+    time_idx = 1 #to avoid having to make too many changes below
+
+    fle_hdles = []
+    for fh in range(num_class):
+        flename = os.path.join(folder, f"{year}_{time_idx}.{fh}.tfrecords")
+        # compress generated TFRecords, courtesy Fenwick
+        options = tf.io.TFRecordOptions(compression_type="GZIP")
+        fle_hdles.append(tf.io.TFRecordWriter(flename, options=options))
+
+    for batch in range(len(dgc)):
+        if (batch % 10) == 0:
+            print(time_idx, batch)
+
+        try:
+            sample = dgc.__getitem__(batch)
+        except FileNotFoundError as e:
+            print(f"Skipping batch {batch} because source file is missing: {e}")
+            continue
+
+        for ii in range(nsamples):
+            # e.g. for image width 94 and img_chunk_width 20, can have 0:20 up to 74:94
+            idh = random.randint(0, img_size_h-img_chunk_width)
+            idw = random.randint(0, img_size_w-img_chunk_width)
+
+            mask = sample[1]['mask'][0,
+                                        idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
+                                        idw*scaling_factor:(idw+img_chunk_width)*scaling_factor].flatten()
+            if np.any(mask):
+                # some of the truth data is invalid, so don't use this subsample
                 continue
 
-            for ii in range(nsamples):
-                # e.g. for image width 94 and img_chunk_width 20, can have 0:20 up to 74:94
-                idh = random.randint(0, img_size_h-img_chunk_width)
-                idw = random.randint(0, img_size_w-img_chunk_width)
-
-                mask = sample[1]['mask'][0,
-                                         idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
-                                         idw*scaling_factor:(idw+img_chunk_width)*scaling_factor].flatten()
-                if np.any(mask):
-                    # some of the truth data is invalid, so don't use this subsample
-                    continue
-
-                if sample[1]['output'].ndim == 4:
-                    truth = sample[1]['output'][0, 0,
+            if sample[1]['output'].ndim == 4:
+                truth = sample[1]['output'][0, 0,
+                                            idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
+                                            idw*scaling_factor:(idw+img_chunk_width)*scaling_factor].flatten()
+            else:
+                truth = sample[1]['output'][0,
+                                            idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
+                                            idw*scaling_factor:(idw+img_chunk_width)*scaling_factor].flatten()
+            const = sample[0]['hi_res_inputs'][0,
                                                 idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
-                                                idw*scaling_factor:(idw+img_chunk_width)*scaling_factor].flatten()
-                else:
-                    truth = sample[1]['output'][0,
-                                                idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
-                                                idw*scaling_factor:(idw+img_chunk_width)*scaling_factor].flatten()
-                const = sample[0]['hi_res_inputs'][0,
-                                                   idh*scaling_factor:(idh+img_chunk_width)*scaling_factor,
-                                                   idw*scaling_factor:(idw+img_chunk_width)*scaling_factor,
-                                                   :].flatten()
-                forecast = sample[0]['lo_res_inputs'][0,
-                                                      idh:idh+img_chunk_width,
-                                                      idw:idw+img_chunk_width,
-                                                      :].flatten()
-                feature = {
-                    'generator_input': _float_feature(forecast),
-                    'constants': _float_feature(const),
-                    'generator_output': _float_feature(truth)
-                }
-                features = tf.train.Features(feature=feature)
-                example = tf.train.Example(features=features)
-                example_to_string = example.SerializeToString()
+                                                idw*scaling_factor:(idw+img_chunk_width)*scaling_factor,
+                                                :].flatten()
+            forecast = sample[0]['lo_res_inputs'][0,
+                                                    idh:idh+img_chunk_width,
+                                                    idw:idw+img_chunk_width,
+                                                    :].flatten()
+            feature = {
+                'generator_input': _float_feature(forecast),
+                'constants': _float_feature(const),
+                'generator_output': _float_feature(truth)
+            }
+            features = tf.train.Features(feature=feature)
+            example = tf.train.Example(features=features)
+            example_to_string = example.SerializeToString()
 
-                if truth.size == 0:
-                    print(f"EMPTY: batch={batch}, ii={ii}, idh={idh}, idw={idw}, truth_full={sample[1]['output'].shape}, chunk={img_chunk_width}")
-                # decide which bin to put this sample in
-                truth_raw = denormalise(truth)  # undo log10(1+x) transformation
-                truth_mean = truth_raw.mean()
-                if truth_mean < bins[0]:
-                    clss = 0
-                elif truth_mean < bins[1]:
-                    clss = 1
-                elif truth_mean < bins[2]:
-                    clss = 2
-                else:
-                    clss = 3
+            if truth.size == 0:
+                print(f"EMPTY: batch={batch}, ii={ii}, idh={idh}, idw={idw}, truth_full={sample[1]['output'].shape}, chunk={img_chunk_width}")
+            # decide which bin to put this sample in
+            truth_raw = denormalise(truth)  # undo log10(1+x) transformation
+            truth_mean = truth_raw.mean()
+            if truth_mean < bins[0]:
+                clss = 0
+            elif truth_mean < bins[1]:
+                clss = 1
+            elif truth_mean < bins[2]:
+                clss = 2
+            else:
+                clss = 3
 
-                fle_hdles[clss].write(example_to_string)
+            fle_hdles[clss].write(example_to_string)
 
-        for fh in fle_hdles:
-            fh.close()
+    for fh in fle_hdles:
+        fh.close()
 
 
 # currently unused; was previously used to make small-image validation dataset,

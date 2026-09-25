@@ -7,3 +7,7 @@ To enable the following instructions: AVX2 FMA, in other operations, rebuild Ten
 usage: 0003_generate_tfrecords.py [-h] --config CONFIG
                                   [--years YEARS [YEARS ...]]
 0003_generate_tfrecords.py: error: unrecognized arguments: -- years 2014 2015
+usage: main.py [-h] [--config CONFIG] [--no_train] [--restart]
+               [--eval_full | --eval_short | --eval_blitz] [--evaluate]
+               [--plot_ranks]
+main.py: error: unrecognized arguments: /network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/nohup_out_files/260998_zam_mad_hind_eval_run0_test.log

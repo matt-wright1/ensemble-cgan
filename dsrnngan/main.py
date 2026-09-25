@@ -6,6 +6,7 @@ import os
 import numpy as np
 import pandas as pd
 import yaml
+import math
 
 from pathlib import Path
 
@@ -41,6 +42,14 @@ if __name__ == "__main__":
         setup_params = yaml.safe_load(f)
 
     local_config_path = setup_params["GENERAL"]["local_config_path"]
+    leadtime = setup_params["DATA"]["leadtime"]
+    accumulation = setup_params["DATA"]["accumulation"]
+
+    if accumulation == 24:
+        assert leadtime % 24 == 6
+
+    os.environ["LEADTIME"] = str(leadtime)
+    os.environ["ACCUMULATION"] = str(accumulation)
 
     if not os.path.isabs(local_config_path):
         local_config_path = os.path.join(
@@ -144,7 +153,9 @@ if __name__ == "__main__":
         if CLtype not in ["CRPS", "CRPS_phys", "ensmeanMSE", "ensmeanMSE_phys"]:
             raise ValueError("Content loss type is restricted to 'CRPS', 'CRPS_phys', 'ensmeanMSE', 'ensmeanMSE_phys'")
 
-    num_checkpoints = int(num_samples/(steps_per_checkpoint * batch_size))
+    num_checkpoints = math.ceil(
+        num_samples / (steps_per_checkpoint * batch_size)
+    )
     checkpoint = 1
 
     # create log folder and model save/load subfolder if they don't exist
@@ -307,7 +318,9 @@ if __name__ == "__main__":
                                                  latent_variables=latent_variables,
                                                  noise_channels=noise_channels,
                                                  padding=padding,
-                                                 ensemble_size=10)
+                                                 ensemble_size=10,
+                                                 leadtime=leadtime,
+                                                 accumulation=accumulation)
 
     if args.plot_ranks:
         plots.plot_histograms(log_folder, val_years, ranks=ranks_to_save, N_ranks=11)

@@ -12,6 +12,7 @@
 
 import os
 import argparse
+import json
 import pathlib
 import yaml
 from datetime import datetime, date, timedelta
@@ -67,11 +68,33 @@ if not os.path.isabs(local_config_path):
 
 os.environ["CGAN_LOCAL_CONFIG"] = local_config_path
 
+data_cfg = setup_params["DATA"]
+
+os.environ["CGAN_ALL_FCST_FIELDS"] = json.dumps(
+    data_cfg["all_fcst_fields"]
+)
+
+os.environ["CGAN_ACCUMULATED_FIELDS"] = json.dumps(
+    data_cfg["accumulated_fields"]
+)
+
+os.environ["CGAN_NONNEGATIVE_FIELDS"] = json.dumps(
+    data_cfg["nonnegative_fields"]
+)
+
+os.environ["CGAN_CROP_TO_BOUNDS"] = str(
+    data_cfg["crop_to_bounds"]
+)
+
+os.environ["CGAN_BOUNDS"] = ",".join(
+    str(x) for x in data_cfg["bounds"]
+)
+
 print(f"Experiment config: {os.path.abspath(args.config_file)}")
 print(f"Local config:      {local_config_path}")
 
 #Imports
-from data import HOURS, all_fcst_fields, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm, crop_to_bounds, bounds
+from data import HOURS, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm, crop_to_bounds, bounds
 import read_config
 from noise import NoiseGenerator
 from setupmodel import setup_model
@@ -223,6 +246,25 @@ for d in iter_dates(start_date, end_date):
         latitude = nc_in["latitude"][:]
         longitude = nc_in["longitude"][:]
 
+        #Decode actual forecast start dates
+        time_var = nc_in["time"]
+        times = nc.num2date(
+            time_var[:],
+            units=time_var.units,
+            calendar=getattr(time_var, "calendar", "standard")
+        )
+
+        matches = [
+            i for i, t in enumerate(times)
+            if (t.year, t.month, t.day) == (d.year, d.month, d.day)
+        ]
+
+        if not matches:
+            print(f"Skipping {d}: not present in tp.nc")
+            continue
+
+        fcst_idx = matches[0]
+
         if crop_to_bounds:
             lat_min, lon_min, lat_max, lon_max = bounds
 
@@ -242,10 +284,6 @@ for d in iter_dates(start_date, end_date):
 
             latitude = latitude[lat_mask]
             longitude = longitude[lon_mask]
-    # nc_in.close()
-
-    # The datetime corresponding to this start time
-    # d = datetime(1900,1,1) + timedelta(hours=int(start_times[0]))
 
     # Create output netCDF file
     pathlib.Path(output_folder).mkdir(parents=True, exist_ok=True)
@@ -255,10 +293,6 @@ for d in iter_dates(start_date, end_date):
         nc_out_path = os.path.join(output_folder, f"GAN_crps_{d.year}{d.month:02d}{d.day:02d}_00Z.nc")
     netcdf_dict = create_output_file(nc_out_path)
 
-    # copy across valid_time from input file
-    # For 7x 24h forecasts with lead times of 6, 30, 54, 78, 102, 126, 150 hours
-    # in_time_idx = ([1,5,9,13,17,21,25],)
-    fcst_idx = d.toordinal() - date(d.year, 1, 1).toordinal()
     netcdf_dict["time_data"][0] = start_times[fcst_idx]
 
     valid_time_idx = ([int(leadtime/HOURS)],) #for 1x24h forecast with lead time LEADTIME
@@ -273,15 +307,29 @@ for d in iter_dates(start_date, end_date):
         # but not quite the same, since that has different assumptions on how the
         # forecast data is stored.  TODO: unify the data normalisation between these?
         field_arrays = []
-        for field in all_fcst_fields:
-            data = load_fcst(field, d.strftime('%Y%m%d'), leadtime=leadtime, log_precip=log_precip, norm=True, fcst_path=fcst_input_folder, fcst_norm_dict=local_fcst_norm)
-            field_arrays.append(data) #TO DO in line above -- alter leadtime logic
+        try:
+            field_arrays = []
 
-        # for j, field in enumerate(all_fcst_fields):
-        #     arr = field_arrays[j]
-        #     print(field, arr.min(), arr.max(), arr.mean())
+            for field in all_fcst_fields:
+                data = load_fcst(
+                    field,
+                    d.strftime('%Y%m%d'),
+                    leadtime=leadtime,
+                    log_precip=log_precip,
+                    norm=True,
+                    fcst_path=fcst_input_folder,
+                    fcst_norm_dict=local_fcst_norm
+                )
+                field_arrays.append(data)
 
-        # print("const input:", network_const_input.min(), network_const_input.max(), network_const_input.mean())
+        except FileNotFoundError as e:
+            print(f"Skipping {d}: {e}")
+            netcdf_dict["rootgrp"].close()
+
+            if os.path.exists(nc_out_path):
+                os.remove(nc_out_path)
+
+            continue
         
         network_fcst_input = np.concatenate(field_arrays, axis=-1)  # lat x lon x 2*len(all_fcst_fields)
         network_fcst_input = np.expand_dims(network_fcst_input, axis=0)  # 1 x lat x lon x 2*len(...)
@@ -308,6 +356,8 @@ for d in iter_dates(start_date, end_date):
 
         #load relevant truth data
         truth_data, _ = load_truth_and_mask(d.strftime('%Y%m%d'), leadtime=leadtime, log_precip=log_precip, truth_path=truth_input_folder)
+        if truth_data.ndim == 3 and truth_data.shape[0] == 1:
+            truth_data = truth_data[0]
         print(f"shape truth = {np.shape(truth_data)}")
         print(f"shape ens_cgan_preds_stacked = {np.shape(ens_cgan_preds_stacked)}")
         crps = ps.crps_ensemble(
@@ -318,11 +368,11 @@ for d in iter_dates(start_date, end_date):
 
         netcdf_dict["crps"][0, valid_time_num, :, :] = crps
 
-    print("network_fcst_input finite:", np.isfinite(network_fcst_input).all())
-    print("gan_prediction finite:", np.isfinite(gan_prediction).all())
-    print("pred finite:", np.isfinite(pred).all())
-    print("pred min/max:", np.nanmin(pred), np.nanmax(pred))
-    netcdf_dict["rootgrp"].close()
+        print("network_fcst_input finite:", np.isfinite(network_fcst_input).all())
+        print("gan_prediction finite:", np.isfinite(gan_prediction).all())
+        print("pred finite:", np.isfinite(pred).all())
+        print("pred min/max:", np.nanmin(pred), np.nanmax(pred))
+        netcdf_dict["rootgrp"].close()
 
     # Close the ECMWF forecasts NetCDF file
     # nc_in.close()

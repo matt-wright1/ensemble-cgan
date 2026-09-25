@@ -13,7 +13,9 @@ ENACT_RAW:
         TRUTH_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/enact_data/enact_for_cgan'
         FORECAST_PATH: "/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/ifs/enacts_grid"
         CONSTANTS_PATH: "/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/constants"
-        NORMALISATION_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/new/tfrecords_enact_raw'
+        # NORMALISATION_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/new/tfrecords_enact_raw'
+        # NORMALISATION_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/tfrecords_no_cape'
+        NORMALISATION_PATH: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/tfrecords_no_cape_new'
         
     TFRecords:
         tfrecords_path: '/network/group/aopp/predict/AWH029_WRIGHT_S2SPREC/cGAN/rwanda_enact/new/tfrecords_enact_raw'

@@ -81,7 +81,15 @@ def plot_sequences(gen,
     value_range = (0, 5)
 
     for kk in range(num_cases):
-        inputs, outputs = next(data_gen_iter)
+        try:
+            inputs, outputs = next(data_gen_iter)
+        except FileNotFoundError as e:
+            print(f"Skipping validation sample: {e}")
+            continue
+        except StopIteration:
+            print("No more validation samples")
+            break
+
         cond = inputs['lo_res_inputs']
         const = inputs['hi_res_inputs']
         seq_real = outputs['output']

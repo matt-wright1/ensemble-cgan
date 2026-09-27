@@ -71,7 +71,14 @@ def get_dates(year,
     """
     Return forecast start dates for which the corresponding truth data exists.
 
-    `leadtime` refers to the START of the target accumulation interval.
+    `leadtime` may be either:
+        - a single integer lead time, or
+        - an iterable of lead times.
+
+    If multiple lead times are supplied, a date is returned only if truth
+    exists for ALL requested lead times.
+
+    Each lead time denotes the START of the target accumulation interval.
 
     For example:
         leadtime=30, accumulation=6
@@ -81,10 +88,22 @@ def get_dates(year,
     Dates are returned as YYYYMMDD strings.
     """
 
-    # Sanity checks
-    assert leadtime >= 0
-    assert leadtime <= 168
-    assert leadtime % HOURS == 0
+    # Allow both:
+    #     leadtime=30
+    # and:
+    #     leadtime=[6, 12, 18, ..., 144]
+    if np.isscalar(leadtime):
+        leadtime = [int(leadtime)]
+    else:
+        leadtime = [int(x) for x in leadtime]
+
+    if not leadtime:
+        raise ValueError("At least one lead time must be supplied")
+
+    for lt in leadtime:
+        assert lt >= 0
+        assert lt <= 168
+        assert lt % HOURS == 0
 
     if accumulation not in (6, 24):
         raise ValueError(
@@ -104,29 +123,35 @@ def get_dates(year,
             datetime.time(0, 0)
         )
 
-        # leadtime denotes the START of the target interval
-        target_start_dt = fcst_dt + datetime.timedelta(
-            hours=leadtime
-        )
+        all_truth_exists = True
 
-        if accumulation == 24:
-            # 24-hour truth files use the _06 naming convention
-            truth_fname = target_start_dt.strftime("%Y%m%d_06")
+        for lt in leadtime:
 
-        elif accumulation == 6:
-            # 6-hour truth files are timestamped by the
-            # start of the accumulation interval
-            truth_fname = target_start_dt.strftime("%Y%m%d_%H")
+            # Lead time denotes the START of the target interval
+            target_start_dt = fcst_dt + datetime.timedelta(
+                hours=lt
+            )
 
-        # Use the year of the target interval, not necessarily
-        # the forecast initialisation year (important around New Year)
-        truth_path = os.path.join(
-            TRUTH_PATH,
-            str(target_start_dt.year),
-            f"{truth_fname}.nc"
-        )
+            if accumulation == 24:
+                # 24-hour truth files use the _06 naming convention
+                truth_fname = target_start_dt.strftime("%Y%m%d_06")
 
-        if os.path.exists(truth_path):
+            elif accumulation == 6:
+                # 6-hour truth files are timestamped by the
+                # start of the accumulation interval
+                truth_fname = target_start_dt.strftime("%Y%m%d_%H")
+
+            truth_path = os.path.join(
+                TRUTH_PATH,
+                str(target_start_dt.year),
+                f"{truth_fname}.nc"
+            )
+
+            if not os.path.exists(truth_path):
+                all_truth_exists = False
+                break
+
+        if all_truth_exists:
             valid_dates.append(curdate.strftime("%Y%m%d"))
 
     return valid_dates
@@ -221,37 +246,84 @@ def load_hires_constants(batch_size=1, constants_path=CONSTANTS_PATH):
 
 
 def load_fcst_truth_batch(dates_batch,
-                          time_idx_batch,
+                          leadtime_batch,
                           fcst_fields=all_fcst_fields,
-                          leadtime=LEADTIME,
                           accumulation=ACCUMULATION,
                           log_precip=False,
                           norm=False,
-                          fcst_norm_dict=None
-                          ):
-    '''
-    Returns a batch of (forecast, truth, mask) data, although usually the batch size is 1
-    Parameters:
-        dates_batch (iterable of strings): Dates of forecasts
-        time_idx_batch (iterable of ints): Corresponding 'valid_time' array indices
-        fcst_fields (list of strings): The fields to be used
-        log_precip (bool): Whether to apply log10(1+x) transform to precip-related forecast fields, and truth
-        norm (bool): Whether to apply normalisation to forecast fields to make O(1)
-    '''
-    batch_x = []  # forecast
-    batch_y = []  # truth
-    batch_mask = []  # mask
+                          fcst_norm_dict=None):
+    """
+    Returns a batch of (forecast, truth, mask) data.
 
-    for time_idx, date in zip(time_idx_batch, dates_batch):
-        batch_x.append(load_fcst_stack(fcst_fields, date, leadtime=leadtime, accumulation=accumulation, log_precip=log_precip, norm=norm, fcst_norm_dict=fcst_norm_dict))
-        truth, mask = load_truth_and_mask(date, leadtime=leadtime, log_precip=log_precip)
+    Each sample has its own forecast start date and lead time.
+
+    Parameters:
+        dates_batch:
+            Iterable of forecast start dates (YYYYMMDD strings).
+
+        leadtime_batch:
+            Iterable of lead times, one per date. Each lead time denotes
+            the START of the target accumulation interval.
+
+        fcst_fields:
+            Forecast fields to use.
+
+        accumulation:
+            Accumulation interval in hours (6 or 24).
+
+        log_precip:
+            Whether to apply log10(1+x) transformation.
+
+        norm:
+            Whether to normalise forecast fields.
+
+        fcst_norm_dict:
+            Optional forecast normalisation dictionary.
+    """
+
+    batch_x = []
+    batch_y = []
+    batch_mask = []
+
+    if len(dates_batch) != len(leadtime_batch):
+        raise ValueError(
+            "dates_batch and leadtime_batch must have the same length"
+        )
+
+    for date, leadtime in zip(dates_batch, leadtime_batch):
+
+        leadtime = int(leadtime)
+
+        batch_x.append(
+            load_fcst_stack(
+                fcst_fields,
+                date,
+                leadtime=leadtime,
+                accumulation=accumulation,
+                log_precip=log_precip,
+                norm=norm,
+                fcst_norm_dict=fcst_norm_dict
+            )
+        )
+
+        truth, mask = load_truth_and_mask(
+            date,
+            leadtime=leadtime,
+            log_precip=log_precip
+        )
+
         batch_y.append(truth)
         batch_mask.append(mask)
 
-    return np.array(batch_x), np.array(batch_y), np.array(batch_mask)
+    return (
+        np.array(batch_x),
+        np.array(batch_y),
+        np.array(batch_mask)
+    )
 
 def load_fcst(field,
               date,
+              hour=0,
               leadtime=LEADTIME,
               accumulation=ACCUMULATION,
               log_precip=False,
@@ -265,7 +337,11 @@ def load_fcst(field,
         0: temporal mean of the ensemble mean
         1: temporal RMS/combined ensemble standard deviation
     """
-    # print(f"Loading forecast {field} on {date}")
+    if hour not in [0, 6, 12, 18]:
+        raise ValueError(
+            f"Unsupported forecast initialisation hour: {hour}. "
+            "Expected one of 0, 6, 12, 18."
+        )
 
     #Normalisation
     norm_dict = fcst_norm if fcst_norm_dict is None else fcst_norm_dict
@@ -315,16 +391,17 @@ def load_fcst(field,
         if t.year == target_date.year
         and t.month == target_date.month
         and t.day == target_date.day
+        and t.hour == hour
     ]
 
     if not matches:
         nc_file.close()
         raise FileNotFoundError(
-            f"No forecast date {date} for field {field}"
+            f"No forecast initialised at {date} {hour:02d}Z "
+            f"for field {field}"
         )
 
     fcst_idx = matches[0]
-    #Check that new time_idx logic is workign as intended
     # print(f"{field}: requested={date}, index={fcst_idx}, actual={times[fcst_idx]}")
 
     lead_idx1 = int(leadtime / HOURS)

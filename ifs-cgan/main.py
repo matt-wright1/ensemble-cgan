@@ -43,12 +43,13 @@ if __name__ == "__main__":
 
     local_config_path = setup_params["GENERAL"]["local_config_path"]
     leadtime = setup_params["DATA"]["leadtime"]
+    if isinstance(leadtime, int):
+        leadtime = [leadtime]
+    else:
+        leadtime = list(leadtime)
     accumulation = setup_params["DATA"]["accumulation"]
 
-    if accumulation == 24:
-        assert leadtime % 24 == 6
-
-    os.environ["LEADTIME"] = str(leadtime)
+    os.environ["LEADTIME"] = str(leadtime[0])
     os.environ["ACCUMULATION"] = str(accumulation)
 
     if not os.path.isabs(local_config_path):
@@ -205,6 +206,8 @@ if __name__ == "__main__":
             val_years=val_years,
             autocoarsen=autocoarsen,
             weights=training_weights,
+            leadtime=leadtime,
+            accumulation=accumulation,
             batch_size=batch_size)
 
         if args.restart:  # load weights and run status

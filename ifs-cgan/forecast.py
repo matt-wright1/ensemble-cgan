@@ -114,6 +114,7 @@ output_folder = fcst_params["OUTPUT"]["folder"]
 ensemble_members = fcst_params["OUTPUT"]["ensemble_members"]
 save_crps_only = fcst_params["OUTPUT"]["save_crps_only"]
 leadtime = fcst_params["MODEL"]["leadtime"]
+accumulation = fcst_params["MODEL"]["accumulation"]
 start_date_in = fcst_params["OUTPUT"]["start_date"]
 end_date_in = fcst_params["OUTPUT"]["end_date"]
 all_fcst_fields = fcst_params["DATA"]["all_fcst_fields"]
@@ -315,6 +316,7 @@ for d in iter_dates(start_date, end_date):
                     field,
                     d.strftime('%Y%m%d'),
                     leadtime=leadtime,
+                    accumulation=accumulation,
                     log_precip=log_precip,
                     norm=True,
                     fcst_path=fcst_input_folder,

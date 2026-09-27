@@ -42,9 +42,18 @@ class DataGenerator(Sequence):
             seed (int): Random seed given to NumPy, used for repeatable shuffles
         '''
 
-        assert leadtime >= 0
-        assert leadtime <= 168
-        assert leadtime % HOURS == 0
+        if np.isscalar(leadtime):
+            leadtime = [int(leadtime)]
+        else:
+            leadtime = [int(x) for x in leadtime]
+
+        if not leadtime:
+            raise ValueError("At least one lead time must be supplied")
+
+        for ld in leadtime:
+            assert ld >= 0
+            assert ld <= 168
+            assert ld % HOURS == 0
 
         if accumulation not in (6, 24):
             raise ValueError(
@@ -52,7 +61,7 @@ class DataGenerator(Sequence):
             )
 
         self.fcst_fields = fcst_fields
-        self.leadtime = leadtime
+        self.requested_leadtime = np.asarray(leadtime, dtype=int)
         self.accumulation = accumulation
         self.batch_size = batch_size
         self.log_precip = log_precip
@@ -73,14 +82,17 @@ class DataGenerator(Sequence):
 
         # convert to numpy array for easy use of np.repeat
         temp_dates = np.array(dates)
+        
+        # Construct every (date, leadtime) training sample
+        self.dates = np.repeat(
+            temp_dates,
+            len(self.requested_leadtime)
+        )
 
-        temp_time_idxs = np.array([0])  # There is only one valid time in this set of forecasts
-
-        # if no shuffle, the DataGenerator will return each interval from the
-        # first date, then each interval from the second date, etc.
-        self.dates = np.repeat(temp_dates, len(temp_time_idxs))
-        self.time_idxs = np.tile(temp_time_idxs, len(temp_dates))
-
+        self.leadtime = np.tile(
+            self.requested_leadtime,
+            len(temp_dates)
+        )
         self.rng = np.random.default_rng(seed)
 
         if self.shuffle:
@@ -98,18 +110,21 @@ class DataGenerator(Sequence):
 
     def __getitem__(self, idx):
         # Get batch at index idx
-        dates_batch = self.dates[idx*self.batch_size:(idx+1)*self.batch_size]
-        time_idx_batch = self.time_idxs[idx*self.batch_size:(idx+1)*self.batch_size]
+        start = idx * self.batch_size
+        end = (idx + 1) * self.batch_size
+
+        dates_batch = self.dates[start:end]
+        leadtime_batch = self.leadtime[start:end]
 
         # Load and return this batch of data
         data_x_batch, data_y_batch, data_mask_batch = load_fcst_truth_batch(
             dates_batch,
-            time_idx_batch,
-            leadtime=self.leadtime,
+            leadtime_batch,
             accumulation=self.accumulation,
             fcst_fields=self.fcst_fields,
             log_precip=self.log_precip,
-            norm=self.fcst_norm)
+            norm=self.fcst_norm
+        )
 
         if self.autocoarsen:
             # replace forecast data by coarsened truth data!
@@ -128,11 +143,12 @@ class DataGenerator(Sequence):
                     "mask": data_mask_batch}
 
     def shuffle_data(self, rng):
-        assert len(self.time_idxs) == len(self.dates)
-        # shuffle both dates and time index arrays the same way
+        assert len(self.leadtime) == len(self.dates)
+
         p = rng.permutation(len(self.dates))
+
         self.dates = self.dates[p]
-        self.time_idxs = self.time_idxs[p]
+        self.leadtime = self.leadtime[p]
 
     def on_epoch_end(self):
         if self.shuffle:

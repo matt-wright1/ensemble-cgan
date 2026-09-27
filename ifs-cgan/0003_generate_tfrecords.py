@@ -183,20 +183,19 @@ if __name__ == "__main__":
     # ------------------------------------------------------------
 
     leadtime = config["DATA"]["leadtime"]
+    if isinstance(leadtime, int):
+        leadtime = [leadtime]
+    else:
+        leadtime = list(leadtime)
     accumulation = config["DATA"]["accumulation"]
     local_config_path = config["GENERAL"]["local_config_path"]
-
-    if leadtime % 6 != 0:
-        raise ValueError(
-            f"leadtime must be a multiple of 6 hours, got {leadtime}"
-        )
 
     if accumulation not in (6, 24):
         raise ValueError(
             f"accumulation must be 6 or 24 hours, got {accumulation}"
         )
 
-    os.environ["LEADTIME"] = str(leadtime)
+    os.environ["LEADTIME"] = str(leadtime[0])
     os.environ["ACCUMULATION"] = str(accumulation)
 
     if not os.path.isabs(local_config_path):

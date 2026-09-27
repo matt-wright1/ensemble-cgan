@@ -81,6 +81,10 @@ mode = setup_params["GENERAL"]["mode"]
 arch = setup_params["MODEL"]["architecture"]
 padding = setup_params["MODEL"]["padding"]
 leadtime = setup_params["DATA"]["leadtime"]
+if isinstance(leadtime, int):
+    leadtime = [leadtime]
+else:
+    leadtime = list(leadtime)
 accumulation = setup_params["DATA"]["accumulation"]
 problem_type = setup_params["GENERAL"]["problem_type"]
 filters_gen = setup_params["GENERATOR"]["filters_gen"]
@@ -149,12 +153,14 @@ seq_real = []
 seq_cond = []
 seq_const = []
 dates_save = []
+leadtime_save = []
 data_predict_iter = iter(data_predict)
 
 for ii in range(num_samples):
     inputs, outputs = next(data_predict_iter)
 
     dates_save.append(data_predict.dates[ii])
+    leadtime_save.append(data_predict.leadtime[ii])
 
     # store denormalised inputs, outputs, predictions
     seq_const.append(inputs['hi_res_inputs'])
@@ -241,7 +247,7 @@ for ii in range(num_samples):
     )
 
     target_start_dt = fcst_date + datetime.timedelta(
-        hours=leadtime
+        hours=int(leadtime_save[ii])
     )
 
     title = (
@@ -353,7 +359,7 @@ if args.plot_all:
         tmp['TRUTH'] = np.maximum(seq_real[ii][0, ..., 0], 1e-6)
         tmp["Forecast"] = np.maximum(seq_cond[ii][0, ..., tpidx_mean], 1e-6)
         tmp['dates'] = dates_save[ii]
-        tmp['leadtime'] = leadtime
+        tmp['leadtime'] = int(leadtime_save[ii])
         tmp['accumulation'] = accumulation
         for jj in range(pred_ensemble_size):
             tmp[f"{mode} pred {jj+1}"] = np.maximum(pred[ii][jj][0, ..., 0], 1e-6)
@@ -392,7 +398,7 @@ if args.plot_all:
                 )
 
                 target_start_dt = fcst_date + datetime.timedelta(
-                    hours=leadtime
+                    hours=int(leadtime_save[kk])
                 )
 
                 target_end_dt = target_start_dt + datetime.timedelta(

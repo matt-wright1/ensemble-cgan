@@ -1,0 +1,47 @@
+MODEL:
+    folder: "../24h_accumulations/model"
+    checkpoint: 105216
+    accumulation: 24
+
+DATA:
+    all_fcst_fields:
+        - mucape
+        - cp
+        - tcc
+        - sp
+        - ssr
+        - t2m
+        - tciw
+        - tclw
+        - tcw
+        - tcwv
+        - tp
+        - u700
+        - v700
+
+    accumulated_fields:
+        - cp
+        - ssr
+        - tp
+
+    nonnegative_fields:
+        - mucape
+        - cp
+        - tcc
+        - sp
+        - ssr
+        - t2m
+        - tciw
+        - tclw
+        - tcw
+        - tcwv
+        - tp
+
+INPUT:
+    truth_folder: 'XXX'
+    fcst_folder: '../24h_accumulations/IFS_forecast_data'
+    constants_folder: './constants'
+    normalisation_folder: '../24h_accumulations/normalisations'
+
+OUTPUT:
+    folder: "../24h_accumulations/cGAN_forecasts_24h"

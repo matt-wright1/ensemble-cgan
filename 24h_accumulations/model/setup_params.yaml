@@ -1,0 +1,83 @@
+DATA:
+  accumulated_fields:
+  - cp
+  - ssr
+  - tp
+  all_fcst_fields:
+  - cp
+  - tcc
+  - sp
+  - ssr
+  - t2m
+  - tciw
+  - tclw
+  - tcw
+  - tcwv
+  - tp
+  - u700
+  - v700
+  bounds:
+  - -2.98
+  - 28.52
+  - -1.02
+  - 30.98
+  crop_to_bounds: false
+  nonnegative_fields:
+  - cp
+  - tcc
+  - sp
+  - ssr
+  - t2m
+  - tciw
+  - tclw
+  - tcw
+  - tcwv
+  - tp
+DISCRIMINATOR:
+  filters_disc: 128
+  learning_rate_disc: 1e-5
+EVAL:
+  add_postprocessing_noise: true
+  avg_pooling: true
+  max_pooling: true
+  num_batches: 25
+  postprocessing_noise_factor: 1e-3
+GENERAL:
+  local_config_path: local_config_zam_mad.yaml
+  mode: GAN
+  problem_type: normal
+GENERATOR:
+  filters_gen: 64
+  latent_variables: 50
+  learning_rate_gen: 1e-5
+  noise_channels: 4
+LEADTIME:
+  leadtime: 30
+MODEL:
+  architecture: forceconv
+  padding: reflect
+SETUP:
+  log_folder: /network/group/aopp/predict/AWH024_COOPERNATH_IFS/IFS/IFS-Zambia/cgan_training/logs_lead30_run2
+TRAIN:
+  CL_type: ensmeanMSE
+  batch_size: 2
+  content_loss_weight: 1000.0
+  ensemble_size: 8
+  kl_weight: 1e-8
+  num_samples: 400000
+  steps_per_checkpoint: 128
+  train_years:
+  - 2014
+  - 2015
+  - 2016
+  - 2017
+  - 2018
+  - 2019
+  training_weights:
+  - 0.4
+  - 0.3
+  - 0.2
+  - 0.1
+VAL:
+  val_size: 8
+  val_years: 2020

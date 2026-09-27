@@ -1,0 +1,56 @@
+GENERAL:
+    local_config_path: "local_config.yaml"
+    mode: "GAN"  # choices 'GAN', 'VAEGAN', 'det'
+    problem_type: "normal"  # choices 'normal' (forecast to truth), 'autocoarsen' (coarsened truth to truth)
+
+DATA:
+    crop_to_bounds: True
+    bounds: [-2.98, 28.52, -1.02, 30.98] #bounds: [lat_min, lon_min, lat_max, lon_max]
+    
+MODEL:
+    architecture: "forceconv"  # choices 'normal', 'forceconv', 'forceconv-long'
+    padding: "reflect"  # convolution padding: 'same', 'reflect', or 'symmetric'
+        
+SETUP: #MW: When you train the model, the results go into this folder
+    log_folder: "/path/to/log/folder"
+
+GENERATOR:
+    #MW: Currently set to these values as they worked for prev. experiments
+    #MW: Reduce to 64 or 32 from 128 for faster iteration
+    filters_gen: 256  # generator network width -- related to size of neural network (larger -> slower and better)
+    #MW: 4 from trial and error -- leave at 4 for now
+    noise_channels: 4  # only used for GAN
+    latent_variables: 50  # latent variables per pixel; only used for VAEGAN
+    #MW: Too small = takes longer; too large = blows up
+    learning_rate_gen: 1e-5  # if training blows up, decrease this
+
+DISCRIMINATOR:
+    #MW: Currently set to these values as they worked for prev. experiments
+    filters_disc: 512  # discriminator network width -- related to size of neural network (larger -> slower and better)
+    #MW: Too small = takes longer; too large = blows up
+    learning_rate_disc: 1e-5  # if training blows up, decrease this
+
+TRAIN:
+    train_years: [2018, 2019, 2021]
+    training_weights: [0.4, 0.3, 0.2, 0.1]  # frequency to sample from each bin
+    num_samples: 160_000  # total generator training samples, default 160,000
+    steps_per_checkpoint: 32  # number of batches per checkpoint save
+    batch_size: 2  # we could use 16 without CL, or 2 with CL #Makes gradient calculated by the GAN more accurate -- increasing it reduces variability at the end
+    kl_weight: 1e-8  # used for VAEGAN
+    #MW: larger for better convergence? settled on 8 at the moment
+    ensemble_size: 8  # size of ensemble for content loss; use null to turn off
+    #Can change if we want
+    CL_type: "ensmeanMSE"  # type of content loss to use: 'CRPS', 'CRPS_phys', 'ensmeanMSE', 'ensmeanMSE_phys'
+    content_loss_weight: 1000.0  # we used 1000 for ensmeanMSE, and 100 for CRPS
+
+VAL:
+    val_years: 2019  # year to draw validation data from (only used for progress.pdf)
+    val_size: 8  # number of examples to plot
+
+EVAL:
+    #MW: when you evaluate the model, it will draw num_batches random samples from validation year
+    num_batches: 25  # number of full-image examples to evaluate on
+    add_postprocessing_noise: True  # flag for adding postprocessing noise in rank statistics eval
+    postprocessing_noise_factor: 1e-3  # factor for scaling postprocessing noise in rank statistics eval
+    max_pooling: True  # also calculate CRPS using max pooling over larger regions
+    avg_pooling: True  # ditto for average pooling

@@ -140,3 +140,13 @@ sync*.sh
 nohup_out_files/
 fenwick_cgan/
 forecast_date_from_Fenwick.py
+forecast_yamls*
+
+#MW allow correct yaml files
+!forecast_6haccum_default.yaml
+!forecast_24haccum_default.yaml
+!data_paths.yaml
+!config.yaml
+!local_config.yaml
+!24h_accumulations/model/*
+!6h_accumulations/model/*

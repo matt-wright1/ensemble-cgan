@@ -347,8 +347,7 @@ if __name__=='__main__':
             oblivion = "/dev/null"
 
         file_URL = (
-            f"https://rain.physics.ox.ac.uk/ICPAC/Zambia-IFS/"
-            f"{accumulation_time}h_accumulations/"
+            f"https://rain.physics.ox.ac.uk/South_East_Africa/IFS_forecast_data/"
             f"IFS_forecast_data/{year}/{file_name}"
         )
 
@@ -383,8 +382,7 @@ if __name__=='__main__':
             )
 
             file_URL = (
-                f"http://megacorr.dynu.net/ICPAC/SEWAA_forecasts/"
-                f"{accumulation_time}h_accumulations/"
+                f"http://megacorr.dynu.net/South_East_Africa/IFS_forecast_data/"
                 f"IFS_forecast_data/{year}/{file_name}"
             )
 

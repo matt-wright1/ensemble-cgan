@@ -146,7 +146,8 @@ forecast_yamls*
 !forecast_6haccum_default.yaml
 !forecast_24haccum_default.yaml
 !data_paths.yaml
+!downscaling_factor.yaml
 !config.yaml
 !local_config.yaml
-!24h_accumulations/model/*
-!6h_accumulations/model/*
+!models/ifs_24h_accumulations/*
+!models/ifs_6h_accumulations/*

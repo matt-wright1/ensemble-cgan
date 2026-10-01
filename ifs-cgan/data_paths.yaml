@@ -60,3 +60,23 @@ ZAM_MAD_HIND_6_MULTILEAD:
 
     TFRecords:
         tfrecords_path: '/network/group/aopp/predict/AWH024_COOPERNATH_IFS/IFS/IFS-Zambia/tfrecords/accum6_multilead'
+
+# LOCAL_SEWAA_6H:
+#     GENERAL:
+#         TRUTH_PATH: '/to/edit/if/you/want/to/calculate/crps'
+#         FORECAST_PATH: '../data/IFS_forecast_data'
+#         CONSTANTS_PATH: ../data/IFS_forecast_data/constants'
+#         NORMALISATION_PATH: ../data/IFS_forecast_data/normalisations/6h_accumulations'
+        
+#     TFRecords:
+#         tfrecords_path: ''
+
+# LOCAL_SEWAA_24H:
+#     GENERAL:
+#         TRUTH_PATH: '/to/edit/if/you/want/to/calculate/crps'
+#         FORECAST_PATH: '../data/IFS_forecast_data'
+#         CONSTANTS_PATH: ../data/IFS_forecast_data/constants'
+#         NORMALISATION_PATH: ../data/IFS_forecast_data/normalisations/24h_accumulations'
+        
+#     TFRecords:
+#         tfrecords_path: ''

@@ -23,7 +23,7 @@ import numpy as np
 from tensorflow.keras.utils import Progbar
 
 #Imports
-from data import HOURS, fcst_norm, denormalise, load_hires_constants, load_fcst, load_truth_and_mask, load_fcst_norm
+from data import HOURS, denormalise, load_hires_constants, load_truth_and_mask, load_fcst_norm, logprec
 import read_config
 from noise import NoiseGenerator
 from setupmodel import setup_model
@@ -86,8 +86,8 @@ if args.leadtime is None:
         args.leadtime = [30, 36, 42, 48]
     elif args.accumulation == 24:
         args.leadtime = [6, 30, 54, 78, 102, 126, 150]
-else:
-    leadtime = args.leadtime
+
+leadtime = args.leadtime
 
 if args.fcst_yaml_file is None:
     if args.accumulation == 6:
@@ -107,7 +107,6 @@ with open(args.fcst_yaml_file, "r") as f:
 
 # Setup
 read_config.set_gpu_mode()  # set up whether to use GPU, and mem alloc mode
-data_paths = read_config.get_data_paths()  # need the constants directory
 downscaling_steps = read_config.read_downscaling_factor()["steps"]
 
 model_folder = fcst_params["MODEL"]["folder"]
@@ -236,73 +235,50 @@ def create_output_file(nc_out_path):
 #Make the forecast for the right data
 
 # Open input netCDF file to get the times
-file_name = os.path.join(fcst_input_folder, str(d.year), "tp.nc")
-with nc.Dataset(file_name, mode="r") as nc_in:
-    start_times = nc_in["time"][:]
-    valid_times = nc_in["fcst_valid_time"][:]
-    latitude = nc_in["latitude"][:]
-    longitude = nc_in["longitude"][:]
+file_name = os.path.join(
+    fcst_input_folder,
+    str(d.year),
+    f"IFS_{args.date}_{hour:02d}Z.nc"
+)
 
-    #Decode actual forecast start dates
-    time_var = nc_in["time"]
-    times = nc.num2date(
-        time_var[:],
-        units=time_var.units,
-        calendar=getattr(time_var, "calendar", "standard")
-    )
+print(f"Opening forecast file: {file_name}")
+nc_in = nc.Dataset(file_name, mode="r")
+start_times = nc_in["time"][:]
+valid_times = nc_in["valid_time"][:]
+latitude = nc_in["latitude"][:]
+longitude = nc_in["longitude"][:]
 
-    matches = [
-        i for i, t in enumerate(times)
-        if (
-            t.year,
-            t.month,
-            t.day,
-            t.hour
-        ) == (
-            d.year,
-            d.month,
-            d.day,
-            hour
+if crop_to_bounds:
+    lat_min, lon_min, lat_max, lon_max = bounds
+
+    # Boolean masks work whether coordinates are ascending or descending
+    lat_mask = (latitude >= lat_min) & (latitude <= lat_max)
+    lon_mask = (longitude >= lon_min) & (longitude <= lon_max)
+
+    if not lat_mask.any():
+        raise ValueError(
+            f"No latitude values found within bounds {lat_min} to {lat_max}."
         )
-    ]
 
-    if not matches:
-        raise ValueError(f"Forecast date {d} not present in tp.nc")        
-    
-    fcst_idx = matches[0]
+    if not lon_mask.any():
+        raise ValueError(
+            f"No longitude values found within bounds {lon_min} to {lon_max}."
+        )
 
-    if crop_to_bounds:
-        lat_min, lon_min, lat_max, lon_max = bounds
-
-        # Boolean masks work whether coordinates are ascending or descending
-        lat_mask = (latitude >= lat_min) & (latitude <= lat_max)
-        lon_mask = (longitude >= lon_min) & (longitude <= lon_max)
-
-        if not lat_mask.any():
-            raise ValueError(
-                f"No latitude values found within bounds {lat_min} to {lat_max}."
-            )
-
-        if not lon_mask.any():
-            raise ValueError(
-                f"No longitude values found within bounds {lon_min} to {lon_max}."
-            )
-
-        latitude = latitude[lat_mask]
-        longitude = longitude[lon_mask]
+    latitude = latitude[lat_mask]
+    longitude = longitude[lon_mask]
 
 # Create output netCDF file
 pathlib.Path(output_folder).mkdir(parents=True, exist_ok=True)
 nc_out_path = os.path.join(output_folder, f"GAN_{d.year}{d.month:02d}{d.day:02d}_{hour:02d}Z.nc")
 netcdf_dict = create_output_file(nc_out_path)
 
-netcdf_dict["time_data"][0] = start_times[fcst_idx]
+netcdf_dict["time_data"][0] = start_times[0]
 
 # Get the valid-time indices corresponding to each requested lead time
 valid_time_idx = [int(lt / HOURS) for lt in leadtime]
 
-# Extract the corresponding valid times
-valid_times_forecast = valid_times[fcst_idx, valid_time_idx]
+valid_times_forecast = valid_times[valid_time_idx]
 
 print("Lead times:", leadtime)
 print("Valid time indices:", valid_time_idx)
@@ -320,30 +296,151 @@ for valid_time_num, current_leadtime in enumerate(leadtime):
 
     field_arrays = []
     
-    try:
-        for field in all_fcst_fields:
-            data = load_fcst(
-                field,
-                d.strftime('%Y%m%d'),
-                hour=hour,
-                leadtime=current_leadtime,
-                accumulation=accumulation,
-                log_precip=log_precip,
-                norm=True,
-                fcst_path=fcst_input_folder,
-                fcst_norm_dict=local_fcst_norm
+    for field in all_fcst_fields:
+
+        # Ensemble mean and standard deviation are already stored in the
+        # combined IFS forecast file.
+        all_data_mean = nc_in[f"{field}_ensemble_mean"]
+        all_data_sd = nc_in[f"{field}_ensemble_standard_deviation"]
+
+        # Convert lead time to 6-hourly index:
+        # 6h -> 1, 30h -> 5, 36h -> 6, etc.
+        lead_idx = int(current_leadtime / HOURS)
+
+        if accumulation == 24:
+
+            if field in accumulated_fields:
+                # Four 6-hour periods covering the 24-hour target
+                temp_data_mean = all_data_mean[
+                    lead_idx:lead_idx + 4, :, :
+                ]
+
+                temp_data_var = (
+                    all_data_sd[
+                        lead_idx:lead_idx + 4, :, :
+                    ] ** 2
+                )
+
+                data1 = np.mean(temp_data_mean, axis=0)
+                data2 = np.sqrt(np.mean(temp_data_var, axis=0))
+
+                data = np.stack([data1, data2], axis=-1)
+
+            else:
+                # Five instantaneous values:
+                # t, t+6, t+12, t+18, t+24
+                temp_data_mean = all_data_mean[
+                    lead_idx:lead_idx + 5, :, :
+                ]
+
+                temp_data_var = (
+                    all_data_sd[
+                        lead_idx:lead_idx + 5, :, :
+                    ] ** 2
+                )
+
+                data1 = (
+                    temp_data_mean[0] / 2
+                    + np.sum(temp_data_mean[1:4], axis=0)
+                    + temp_data_mean[4] / 2
+                ) / 4
+
+                data2 = (
+                    temp_data_var[0] / 2
+                    + np.sum(temp_data_var[1:4], axis=0)
+                    + temp_data_var[4] / 2
+                ) / 4
+
+                data = np.stack(
+                    [data1, np.sqrt(data2)],
+                    axis=-1
+                )
+
+        elif accumulation == 6:
+
+            if field in accumulated_fields:
+                # Accumulated fields already represent the 6-hour interval.
+                data1 = all_data_mean[lead_idx, :, :]
+                data2 = all_data_sd[lead_idx, :, :]
+
+            else:
+                # Instantaneous fields: average the start and end of the
+                # 6-hour interval using the trapezium rule.
+                temp_data_mean = all_data_mean[
+                    lead_idx:lead_idx + 2, :, :
+                ]
+
+                temp_data_var = (
+                    all_data_sd[
+                        lead_idx:lead_idx + 2, :, :
+                    ] ** 2
+                )
+
+                data1 = (
+                    temp_data_mean[0] + temp_data_mean[1]
+                ) / 2
+
+                data2 = (
+                    temp_data_var[0] + temp_data_var[1]
+                ) / 2
+
+                data2 = np.sqrt(data2)
+
+            data = np.stack([data1, data2], axis=-1)
+
+        else:
+            raise ValueError(
+                f"Unsupported accumulation period: {accumulation}"
             )
-            field_arrays.append(data)
 
-    except FileNotFoundError as e:
-        netcdf_dict["rootgrp"].close()
+        # Crop the forecast fields to the same region as the output grid.
+        if crop_to_bounds:
+            data = data[lat_mask, :, :]
+            data = data[:, lon_mask, :]
 
-        if os.path.exists(nc_out_path):
-            os.remove(nc_out_path)
+        # Eliminate any small negative values caused by regridding/numerics.
+        if field in nonnegative_fields:
+            data = np.maximum(data, 0.0)
 
-        raise FileNotFoundError(
-            f"Could not produce {current_leadtime}h forecast: {e}"
-        ) from e
+        # Unit conversions
+        if field in ["tp", "cp"]:
+            # Precipitation is in metres accumulated over 6 hours.
+            # Convert to mm/hr.
+            data *= 1000
+            data /= HOURS
+
+        elif field in accumulated_fields:
+            # Other accumulated fields (e.g. ssr):
+            # convert 6-hour accumulation to per-second rate.
+            data /= HOURS * 3600
+
+        # Normalisation
+        if field in ["tp", "cp"]:
+            data = logprec(data, True)
+
+        elif field in ["mcc", "tcc"]:
+            # Already bounded between 0 and 1.
+            pass
+
+        elif field in ["sp", "t2m"]:
+            # Subtract the historical mean from the ensemble mean only.
+            # Do not subtract it from the ensemble standard deviation.
+            data[:, :, 0] -= local_fcst_norm[field]["mean"]
+
+            # Scale both ensemble mean and ensemble standard deviation.
+            data /= local_fcst_norm[field]["std"]
+
+        elif field in nonnegative_fields:
+            data /= local_fcst_norm[field]["max"]
+
+        else:
+            # Wind fields
+            data /= max(
+                -local_fcst_norm[field]["min"],
+                local_fcst_norm[field]["max"]
+            )
+
+        field_arrays.append(data)
     
     network_fcst_input = np.concatenate(field_arrays, axis=-1)  # lat x lon x 2*len(all_fcst_fields)
     network_fcst_input = np.expand_dims(network_fcst_input, axis=0)  # 1 x lat x lon x 2*len(...)

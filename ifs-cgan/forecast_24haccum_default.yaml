@@ -1,11 +1,12 @@
 MODEL:
-    folder: "../24h_accumulations/model"
+    folder: "../models/ifs_24h_accumulations"
     checkpoint: 105216
     accumulation: 24
 
 DATA:
+    crop_to_bounds: True
+    bounds: [-35.06, 15.94, 3.26, 51.06] #bounds: [lat_min, lon_min, lat_max, lon_max]
     all_fcst_fields:
-        - mucape
         - cp
         - tcc
         - sp
@@ -25,7 +26,6 @@ DATA:
         - tp
 
     nonnegative_fields:
-        - mucape
         - cp
         - tcc
         - sp
@@ -38,10 +38,10 @@ DATA:
         - tp
 
 INPUT:
-    truth_folder: 'XXX'
-    fcst_folder: '../24h_accumulations/IFS_forecast_data'
-    constants_folder: './constants'
-    normalisation_folder: '../24h_accumulations/normalisations'
+    truth_folder: '/to/edit/if/you/want/to/calculate/crps'
+    fcst_folder: '../data/IFS_forecast_data'
+    constants_folder: '../data/IFS_forecast_data/constants'
+    normalisation_folder: '../data/IFS_forecast_data/normalisations/24h_accumulations'
 
 OUTPUT:
-    folder: "../24h_accumulations/cGAN_forecasts_24h"
+    folder: "../data/ifs_24h_accumulations/cGAN_forecasts_24h"

@@ -1,5 +1,5 @@
 MODEL:
-    folder: "../6h_accumulations/model"
+    folder: "../models/ifs_6h_accumulations"
     checkpoint: XXXX
     accumulation: 6
 
@@ -41,9 +41,9 @@ DATA:
 
 INPUT:
     truth_folder: '/to/edit/if/you/want/to/calculate/crps'
-    fcst_folder: '../6h_accumulations/IFS_forecast_data'
-    constants_folder: './constants'
-    normalisation_folder: '../6h_accumulations/normalisations'
+    fcst_folder: '../data/IFS_forecast_data'
+    constants_folder: '../data/IFS_forecast_data/constants'
+    normalisation_folder: '../data/IFS_forecast_data/normalisations/6h_accumulations'
 
 OUTPUT:
-    folder: "../6h_accumulations/cGAN_forecasts_6h"
+    folder: "../data/ifs_6h_accumulations/cGAN_forecasts_6h"

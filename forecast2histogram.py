@@ -5,9 +5,22 @@ import numpy as np
 from datetime import datetime
 import netCDF4 as nc
 import argparse
+import os
 
-#Parse command line args
 parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    "--date",
+    help="Forecast date in YYYYMMDD format"
+)
+
+parser.add_argument(
+    "--time",
+    type=int,
+    choices=[0, 6, 12, 18],
+    help="Forecast initialisation hour"
+)
+
 parser.add_argument(
     "--accumulation",
     choices=[6, 24],
@@ -15,24 +28,32 @@ parser.add_argument(
     default=6,
     help="Accumulation of forecasts in hours (default: 6)"
 )
+
 args = parser.parse_args()
+
 accumulation = args.accumulation
 
+time_str = args.date
+year = int(time_str[0:4])
+month = int(time_str[4:6])
+day = int(time_str[6:8])
+hour = args.time
+
 # Where the counts are saved to
-output_dir = f'../interface/view_forecasts/data/IFS_cGAN_counts_{accumulation}h'
+output_dir = f'interface/view_forecasts/data/IFS_cGAN_counts_{accumulation}h/{year}'
+os.makedirs(output_dir, exist_ok=True)
 # Where the forecasts are downloaded to
-data_dir = "cGAN_forecasts"
+if accumulation == 6:
+    data_dir = "data/ifs_24h_accumulations/cGAN_forecasts_6h"
+elif accumulation == 24:
+    data_dir = "data/ifs_24h_accumulations/cGAN_forecasts_24h"
+else:
+    raise ValueError("Accumulation must be 6 or 24.")
 
 # Smaller chunk size means slower but less RAM usage
 # Larger chunk size means faster but more RAM usage
 chunk_size = 50
 
-# Get the date from the command line argument
-time_str = sys.argv[1]
-year = int(time_str[0:4])
-month = int(time_str[4:6])
-day = int(time_str[6:8])
-hour = int(sys.argv[2])
 
 # Define the bins we will use on an approximate log scale (mm/h)
 bin_spec_1h = np.array([ 0.        ,  0.04166667,  0.08333333,  0.20833333,  0.41666667,
@@ -85,7 +106,7 @@ for valid_time_num in range(len(valid_time)):
     valid_hour = lead_hours[valid_time_num]
 
     file_name = (
-        f"{output_dir}/{year}/"
+        f"{output_dir}/"
         f"counts_{year}{month:02d}{day:02d}_"
         f"{hour:02d}_{valid_hour}h.nc"
     )

@@ -10,11 +10,21 @@ import xarray as xr
 
 import read_config
 
-data_paths = read_config.get_data_paths()
-TRUTH_PATH = data_paths["GENERAL"]["TRUTH_PATH"]
-FCST_PATH = data_paths["GENERAL"]["FORECAST_PATH"]
-CONSTANTS_PATH = data_paths["GENERAL"]["CONSTANTS_PATH"]
-NORMALISATION_PATH = data_paths["GENERAL"]["NORMALISATION_PATH"]
+try:
+    data_paths = read_config.get_data_paths()
+
+    TRUTH_PATH = data_paths["GENERAL"]["TRUTH_PATH"]
+    FCST_PATH = data_paths["GENERAL"]["FORECAST_PATH"]
+    CONSTANTS_PATH = data_paths["GENERAL"]["CONSTANTS_PATH"]
+    NORMALISATION_PATH = data_paths["GENERAL"]["NORMALISATION_PATH"]
+
+except (KeyError, FileNotFoundError):
+    data_paths = None
+
+    TRUTH_PATH = None
+    FCST_PATH = None
+    CONSTANTS_PATH = None
+    NORMALISATION_PATH = None
 
 HOURS = 6  #6 hour data
 
@@ -159,7 +169,7 @@ def get_dates(year,
 def load_truth_and_mask(date,
                         leadtime=LEADTIME,
                         log_precip=False,
-                        truth_path=TRUTH_PATH):
+                        truth_path=None):
     '''
     Returns a single (truth, mask) item of data.
     Parameters:
@@ -167,6 +177,15 @@ def load_truth_and_mask(date,
         time_idx: forecast 'valid time' array index
         log_precip: whether to apply log10(1+x) transformation
     '''
+    if truth_path is None:
+        truth_path = TRUTH_PATH
+
+    if truth_path is None:
+        raise ValueError(
+            "No truth data path supplied. "
+            "Pass truth_path explicitly or configure TRUTH_PATH."
+        )
+    
     # convert date and time_idx to get the correct truth file
     fcst_date = datetime.datetime.strptime(date, "%Y%m%d")
     valid_dt = fcst_date + datetime.timedelta(hours=leadtime)
@@ -201,7 +220,15 @@ def load_truth_and_mask(date,
         return y, mask
 
 #MW: needs changing if data source changes
-def load_hires_constants(batch_size=1, constants_path=CONSTANTS_PATH):
+def load_hires_constants(batch_size=1, constants_path=None):
+    if constants_path is None:
+        constants_path = CONSTANTS_PATH
+
+    if constants_path is None:
+        raise ValueError(
+            "No constants path supplied. "
+            "Pass constants_path explicitly or configure CONSTANTS_PATH."
+        )    
     oro_path = os.path.join(constants_path, "elev.nc")
     df = xr.load_dataset(oro_path)
     if crop_to_bounds and 'latitude' in df.coords:
@@ -328,7 +355,7 @@ def load_fcst(field,
               accumulation=ACCUMULATION,
               log_precip=False,
               norm=False,
-              fcst_path=FCST_PATH,
+              fcst_path=None,
               fcst_norm_dict=None):
     """
     Returns forecast field data for the given date and accumulation interval.
@@ -341,6 +368,14 @@ def load_fcst(field,
         raise ValueError(
             f"Unsupported forecast initialisation hour: {hour}. "
             "Expected one of 0, 6, 12, 18."
+        )
+    if fcst_path is None:
+        fcst_path = FCST_PATH
+
+    if fcst_path is None:
+        raise ValueError(
+            "No forecast data path supplied. "
+            "Pass fcst_path explicitly or configure FORECAST_PATH."
         )
 
     #Normalisation
@@ -541,7 +576,6 @@ def load_fcst(field,
     else:
         return data
 
-
 def load_fcst_stack(fields,
                     date,
                     leadtime=LEADTIME,
@@ -666,7 +700,16 @@ def gen_fcst_norm(year=2018):
         pickle.dump(stats_dic, f)
 
 
-def load_fcst_norm(year=2018, normalisation_path=NORMALISATION_PATH):
+def load_fcst_norm(year=2018, normalisation_path=None):
+    if normalisation_path is None:
+        normalisation_path = NORMALISATION_PATH
+
+    if normalisation_path is None:
+        raise ValueError(
+            "No normalisation path supplied. "
+            "Pass normalisation_path explicitly or configure NORMALISATION_PATH."
+        )   
+
     print("In load_fcst_norm")
     fcstnorm_path = os.path.join(normalisation_path, f"FCSTNorm{year}.pkl")
     print(f"fcstnorm_path = {fcstnorm_path}")
@@ -675,9 +718,13 @@ def load_fcst_norm(year=2018, normalisation_path=NORMALISATION_PATH):
 
 
 try:
-    print("Loading forecast normalisations")
-    fcst_norm = load_fcst_norm(2018)
-except:  # noqa
+    if NORMALISATION_PATH is not None:
+        print("Loading forecast normalisations")
+        fcst_norm = load_fcst_norm(2018)
+    else:
+        fcst_norm = None
+
+except Exception:
     fcst_norm = None
     print("******************************************")
     print("*** FORECAST NORMALISATIONS NOT LOADED ***")

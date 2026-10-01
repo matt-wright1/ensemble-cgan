@@ -25,7 +25,7 @@ args = parser.parse_args()
 accumulation = args.accumulation
 
 # The directory with the counts data in
-counts_dir = "interface/view_forecasts/data/IFS_cGAN_counts_{accumulation}h"
+counts_dir = f"interface/view_forecasts/data/IFS_cGAN_counts_{accumulation}h"
 
 # Find the years to include
 counts_years = []

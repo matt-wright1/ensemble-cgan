@@ -2,6 +2,7 @@
 import os
 import datetime
 import pickle
+import json
 
 import numpy as np
 import netCDF4 as nc
@@ -9,31 +10,51 @@ import xarray as xr
 
 import read_config
 
-data_paths = read_config.get_data_paths()
-TRUTH_PATH = data_paths["GENERAL"]["TRUTH_PATH"]
-MASK_PATH = data_paths["GENERAL"]["MASK_PATH"]
-FCST_PATH = data_paths["GENERAL"]["FORECAST_PATH"]
-CONSTANTS_PATH = data_paths["GENERAL"]["CONSTANTS_PATH"]
-NORMALISATION_PATH = data_paths["GENERAL"]["NORMALISATION_PATH"]
+try:
+    data_paths = read_config.get_data_paths()
 
-#MW: lits of all fields to read in
-# all_fcst_fields = ['cape', 'cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp', 'u700', 'v700']
-# accumulated_fields = ['cp', 'ssr', 'tp']
-# nonnegative_fields = ['cape', 'cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp'] #MW: things that can't be below 0
+    TRUTH_PATH = data_paths["GENERAL"]["TRUTH_PATH"]
+    MASK_PATH = data_paths["GENERAL"]["MASK_PATH"]
+    FCST_PATH = data_paths["GENERAL"]["FORECAST_PATH"]
+    CONSTANTS_PATH = data_paths["GENERAL"]["CONSTANTS_PATH"]
+    NORMALISATION_PATH = data_paths["GENERAL"]["NORMALISATION_PATH"]
 
-#Without CAPE
-all_fcst_fields = ['cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp', 'u700', 'v700']
-accumulated_fields = ['cp', 'ssr', 'tp']
-nonnegative_fields = ['cp', 'mcc', 'sp', 'ssr', 't2m', 'tciw', 'tclw', 'tcrw', 'tcw', 'tcwv', 'tp'] #MW: things that can't be below 0
+except (KeyError, FileNotFoundError):
+    data_paths = None
 
-crop_to_bounds = False #if you want to crop constants and forecasts to bounds
-bounds = [-2.98, 28.52, -1.02, 30.98] #lat_min, lon_min, lat_max, lon_max
+    TRUTH_PATH = None
+    FCST_PATH = None
+    CONSTANTS_PATH = None
+    NORMALISATION_PATH = None
 
 HOURS = 6  #6 hour data
-LEADTIME = 30 #Should be multiple of 24 + 6 hours (30, 54, 78, 102, 126, 150, 174)
 
-class ForecastDataUnavailable(Exception):
-    pass
+crop_to_bounds = (
+    os.environ.get("CGAN_CROP_TO_BOUNDS", "False").lower()
+    == "true"
+)
+
+bounds_str = os.environ.get("CGAN_BOUNDS")
+
+if bounds_str is not None:
+    bounds = [float(x) for x in bounds_str.split(",")]
+else:
+    bounds = None
+
+all_fcst_fields = json.loads(
+    os.environ.get("CGAN_ALL_FCST_FIELDS", "[]")
+)
+
+accumulated_fields = json.loads(
+    os.environ.get("CGAN_ACCUMULATED_FIELDS", "[]")
+)
+
+nonnegative_fields = json.loads(
+    os.environ.get("CGAN_NONNEGATIVE_FIELDS", "[]")
+)
+
+LEADTIME = int(os.environ.get("LEADTIME", 30))
+ACCUMULATION = int(os.environ.get("ACCUMULATION", 24))
 
 # utility function; generator to iterate over a range of dates
 def daterange(start_date, end_date):
@@ -55,77 +76,124 @@ def logprec(y, log_precip=False):
         return y
 
 
-#MW: If changing data source, need to change this function
 def get_dates(year,
-              start_hour,
-              end_hour):
-    '''
-    Returns list of valid forecast start dates for which 'truth' data
-    exists, given the other input parameters. If truth data is not available
-    for certain days/hours, this will not be the full year. Dates are returned
-    as a list of YYYYMMDD strings.
+              leadtime=LEADTIME,
+              accumulation=ACCUMULATION):
+    """
+    Return forecast start dates for which the corresponding truth data exists.
 
-    Parameters:
-        year (int): forecasts starting in this year
-        start_hour (int): Lead time of first forecast desired
-        end_hour (int): Lead time of last forecast desired
-    '''
-    # sanity checks for our dataset
-    assert year in (2018, 2019, 2020, 2021)
-    assert start_hour >= 0
-    assert end_hour <= 168
-    assert start_hour % HOURS == 0
-    assert end_hour % HOURS == 0
-    assert end_hour >= start_hour
+    `leadtime` may be either:
+        - a single integer lead time, or
+        - an iterable of lead times.
 
-    # Build "cache" of truth data dates/times that exist
-    truth_cache = set()
+    If multiple lead times are supplied, a date is returned only if truth
+    exists for ALL requested lead times.
+
+    Each lead time denotes the START of the target accumulation interval.
+
+    For example:
+        leadtime=30, accumulation=6
+        -> target interval is +30 h to +36 h
+        -> truth file is timestamped at +30 h
+
+    Dates are returned as YYYYMMDD strings.
+    """
+
+    # Allow both:
+    #     leadtime=30
+    # and:
+    #     leadtime=[6, 12, 18, ..., 144]
+    if np.isscalar(leadtime):
+        leadtime = [int(leadtime)]
+    else:
+        leadtime = [int(x) for x in leadtime]
+
+    if not leadtime:
+        raise ValueError("At least one lead time must be supplied")
+
+    for lt in leadtime:
+        assert lt >= 0
+        assert lt <= 168
+        assert lt % HOURS == 0
+
+    if accumulation not in (6, 24):
+        raise ValueError(
+            f"Unsupported accumulation period: {accumulation} hours"
+        )
+
     start_date = datetime.date(year, 1, 1)
-    end_date = datetime.date(year+1, 1, end_hour//24 + 2)  # go a bit into following year
-    for curdate in daterange(start_date, end_date):
-        datestr = curdate.strftime('%Y%m%d')
-        fname = f"{datestr}_06" #TO CHECK
-        if os.path.exists(os.path.join(TRUTH_PATH, f"{year}/{fname}.nc")):
-            truth_cache.add(fname)
+    end_date = datetime.date(year + 1, 1, 1)
 
-    # Now work out which IFS start dates to use. For each candidate start date,
-    # work out which truth dates+times are needed, and check if they exist.
-    start_date = datetime.date(year, 1, 1)
-    end_date = datetime.date(year+1, 1, 1)
     valid_dates = []
 
     for curdate in daterange(start_date, end_date):
-            # Convert forecast start date to datetime, otherwise %H becomes 00
-            # fcst_dt = datetime.datetime.combine(curdate, datetime.time(0, 0))
-            truth_fname = curdate.strftime("%Y%m%d_06")
 
-            if truth_fname not in truth_cache:
-                continue
+        # Forecasts initialise at 00 UTC
+        fcst_dt = datetime.datetime.combine(
+            curdate,
+            datetime.time(0, 0)
+        )
 
+        all_truth_exists = True
+
+        for lt in leadtime:
+
+            # Lead time denotes the START of the target interval
+            target_start_dt = fcst_dt + datetime.timedelta(
+                hours=lt
+            )
+
+            if accumulation == 24:
+                # 24-hour truth files use the _06 naming convention
+                truth_fname = target_start_dt.strftime("%Y%m%d_06")
+
+            elif accumulation == 6:
+                # 6-hour truth files are timestamped by the
+                # start of the accumulation interval
+                truth_fname = target_start_dt.strftime("%Y%m%d_%H")
+
+            truth_path = os.path.join(
+                TRUTH_PATH,
+                str(target_start_dt.year),
+                f"{truth_fname}.nc"
+            )
+
+            if not os.path.exists(truth_path):
+                all_truth_exists = False
+                break
+
+        if all_truth_exists:
             valid_dates.append(curdate.strftime("%Y%m%d"))
 
     return valid_dates
 
-#MW: truth = truth data; mask = region of interest (true within region)
-#MW: needs changing if data source changes
 def load_truth_and_mask(date,
-                        time_idx,
+                        leadtime=LEADTIME,
                         log_precip=False,
-                        truth_path=TRUTH_PATH,
-                        mask_path=MASK_PATH):
+                        truth_path=None,
+                        mask_path=None):
     '''
     Returns a single (truth, mask) item of data.
     Parameters:
         date: forecast start date
-        time_idx: forecast 'valid time' array index
+        leadtime: forecast lead time
         log_precip: whether to apply log10(1+x) transformation
     '''
+    if truth_path is None:
+        truth_path = TRUTH_PATH
+
+    if truth_path is None:
+        raise ValueError(
+            "No truth data path supplied. "
+            "Pass truth_path explicitly or configure TRUTH_PATH."
+        )
+    
     # convert date and time_idx to get the correct truth file
     fcst_date = datetime.datetime.strptime(date, "%Y%m%d")
-    valid_dt = fcst_date + datetime.timedelta(hours=LEADTIME)  #MW: changed from HOURS to LEADTIME
+    valid_dt = fcst_date + datetime.timedelta(hours=leadtime)
     year = str(valid_dt.year)
-    fname = f"{valid_dt.strftime('%Y%m%d')}_06"
-    data_path = os.path.join(truth_path, year, f"{fname}.nc")
+    fname = valid_dt.strftime('%Y%m%d_%H')
+    data_path = os.path.join(truth_path, f"{year}/{fname}.nc")
 
     df = xr.open_dataset(data_path)
     if crop_to_bounds and 'latitude' in df.coords:
@@ -157,7 +225,10 @@ def load_truth_and_mask(date,
         return y, mask
 
 #MW: needs changing if data source changes
-def load_hires_constants(batch_size=1, constants_path=CONSTANTS_PATH, constants_list=None):
+def load_hires_constants(batch_size=1, constants_path=None, constants_list=None):
+
+    if constants_path is None:
+        constants_path = CONSTANTS_PATH
 
     if not constants_list or len(constants_list) == 0:
         return None
@@ -215,49 +286,110 @@ def load_hires_constants_from_files(batch_size=1, constants_path=CONSTANTS_PATH,
 
 
 def load_fcst_truth_batch(dates_batch,
-                          time_idx_batch,
+                          leadtime_batch,
                           fcst_fields=all_fcst_fields,
+                          accumulation=ACCUMULATION,
                           log_precip=False,
                           norm=False,
-                          fcst_norm_dict=None
-                          ):
-    '''
-    Returns a batch of (forecast, truth, mask) data, although usually the batch size is 1
-    Parameters:
-        dates_batch (iterable of strings): Dates of forecasts
-        time_idx_batch (iterable of ints): Corresponding 'valid_time' array indices
-        fcst_fields (list of strings): The fields to be used
-        log_precip (bool): Whether to apply log10(1+x) transform to precip-related forecast fields, and truth
-        norm (bool): Whether to apply normalisation to forecast fields to make O(1)
-    '''
-    batch_x = []  # forecast
-    batch_y = []  # truth
-    batch_mask = []  # mask
+                          fcst_norm_dict=None):
+    """
+    Returns a batch of (forecast, truth, mask) data.
 
-    for time_idx, date in zip(time_idx_batch, dates_batch):
-        batch_x.append(load_fcst_stack(fcst_fields, date, time_idx, log_precip=log_precip, norm=norm, fcst_norm_dict=fcst_norm_dict))
-        truth, mask = load_truth_and_mask(date, time_idx, log_precip=log_precip)
+    Each sample has its own forecast start date and lead time.
+
+    Parameters:
+        dates_batch:
+            Iterable of forecast start dates (YYYYMMDD strings).
+
+        leadtime_batch:
+            Iterable of lead times, one per date. Each lead time denotes
+            the START of the target accumulation interval.
+
+        fcst_fields:
+            Forecast fields to use.
+
+        accumulation:
+            Accumulation interval in hours (6 or 24).
+
+        log_precip:
+            Whether to apply log10(1+x) transformation.
+
+        norm:
+            Whether to normalise forecast fields.
+
+        fcst_norm_dict:
+            Optional forecast normalisation dictionary.
+    """
+
+    batch_x = []
+    batch_y = []
+    batch_mask = []
+
+    if len(dates_batch) != len(leadtime_batch):
+        raise ValueError(
+            "dates_batch and leadtime_batch must have the same length"
+        )
+
+    for date, leadtime in zip(dates_batch, leadtime_batch):
+
+        leadtime = int(leadtime)
+
+        batch_x.append(
+            load_fcst_stack(
+                fcst_fields,
+                date,
+                leadtime=leadtime,
+                accumulation=accumulation,
+                log_precip=log_precip,
+                norm=norm,
+                fcst_norm_dict=fcst_norm_dict
+            )
+        )
+
+        truth, mask = load_truth_and_mask(
+            date,
+            leadtime=leadtime,
+            log_precip=log_precip
+        )
+
         batch_y.append(truth)
         batch_mask.append(mask)
 
-    return np.array(batch_x), np.array(batch_y), np.array(batch_mask)
+    return (
+        np.array(batch_x),
+        np.array(batch_y),
+        np.array(batch_mask)
+    )
 
-#MW: loads s2s data; needs changing if data source changes
 def load_fcst(field,
               date,
-              time_idx,
+              hour=0,
+              leadtime=LEADTIME,
+              accumulation=ACCUMULATION,
               log_precip=False,
               norm=False,
-              fcst_path=FCST_PATH,
+              fcst_path=None,
               fcst_norm_dict=None):
-    '''
-    Returns forecast field data for the given date and time interval.
+    """
+    Returns forecast field data for the given date and accumulation interval.
 
-    Four channels are returned for each field:
-        - instantaneous fields: mean and stdev at the start of the interval, mean and stdev at the end of the interval
-        - accumulated field: mean and stdev of increment over the interval, and the last two channels are all 0
-    '''
-    # print(f"Loading forecast {field} on {date}")
+    Two channels are returned for each field:
+        0: temporal mean of the ensemble mean
+        1: temporal RMS/combined ensemble standard deviation
+    """
+    if hour not in [0, 6, 12, 18]:
+        raise ValueError(
+            f"Unsupported forecast initialisation hour: {hour}. "
+            "Expected one of 0, 6, 12, 18."
+        )
+    if fcst_path is None:
+        fcst_path = FCST_PATH
+
+    if fcst_path is None:
+        raise ValueError(
+            "No forecast data path supplied. "
+            "Pass fcst_path explicitly or configure FORECAST_PATH."
+        )
 
     #Normalisation
     norm_dict = fcst_norm if fcst_norm_dict is None else fcst_norm_dict
@@ -290,78 +422,136 @@ def load_fcst(field,
             lat_slice = slice(lat_idx[0], lat_idx[-1] + 1)
             lon_slice = slice(lon_idx[0], lon_idx[-1] + 1)
 
-    # Find forecast index using the actual time coordinate.
-    # Some files contain missing/masked entries in the time dimension,
-    # so these must be ignored.
+    # Find this date's actual index in THIS field's NetCDF file.
+    # Different forecast fields may contain different sets of dates.
+    time_var = nc_file.variables["time"]
 
-    time_var = nc_file["time"]
-    start_times = time_var[:]
+    times = nc.num2date(
+        time_var[:],
+        units=time_var.units,
+        calendar=getattr(time_var, "calendar", "standard")
+    )
 
     target_date = datetime.datetime.strptime(date, "%Y%m%d").date()
 
-    # Convert only valid (unmasked) times.
-    valid_indices = np.where(~np.ma.getmaskarray(start_times))[0]
+    matches = [
+        i for i, t in enumerate(times)
+        if t.year == target_date.year
+        and t.month == target_date.month
+        and t.day == target_date.day
+        and t.hour == hour
+    ]
 
-    matches = []
-
-    for idx in valid_indices:
-        t = nc.num2date(
-            start_times[idx],
-            units=time_var.units,
-            calendar=getattr(time_var, "calendar", "standard")
-        )
-
-        if (
-            t.year == target_date.year
-            and t.month == target_date.month
-            and t.day == target_date.day
-        ):
-            matches.append(idx)
-
-    if len(matches) == 0:
+    if not matches:
         nc_file.close()
-        raise ForecastDataUnavailable(
-            f"No valid {field} forecast found for {date} in {ds_path}"
-        )
-
-    if len(matches) > 1:
-        nc_file.close()
-        raise ValueError(
-            f"Multiple {field} forecasts found for {date} in {ds_path}: "
-            f"indices {matches}"
+        raise FileNotFoundError(
+            f"No forecast initialised at {date} {hour:02d}Z "
+            f"for field {field}"
         )
 
     fcst_idx = matches[0]
+    # print(f"{field}: requested={date}, index={fcst_idx}, actual={times[fcst_idx]}")
 
-    lead_idx1 = int(LEADTIME / HOURS)
-    lead_idx2 = (
-        lead_idx1 + 4
-        if field in accumulated_fields
-        else lead_idx1 + 5
-    )
+    lead_idx1 = int(leadtime / HOURS)
 
-    if lead_idx2 > all_data_mean.shape[1]:
-        nc_file.close()
+    if accumulation == 24:
+        if field in accumulated_fields:
+            # Four 6-hour accumulation periods:
+            # [t,t+6], [t+6,t+12], [t+12,t+18], [t+18,t+24]
+            lead_idx2 = lead_idx1 + 4
+        else:
+            # Five instantaneous times:
+            # t, t+6, t+12, t+18, t+24
+            lead_idx2 = lead_idx1 + 5
+
+    elif accumulation == 6:
+        if field in accumulated_fields:
+            # One 6-hour accumulation period:
+            # [t,t+6]
+            lead_idx2 = lead_idx1 + 1
+        else:
+            # Two instantaneous times:
+            # t, t+6
+            lead_idx2 = lead_idx1 + 2
+
+    else:
         raise ValueError(
-            f"Insufficient lead times for {field} on {date}: "
-            f"need indices {lead_idx1}:{lead_idx2}, "
-            f"but lead-time dimension has size {all_data_mean.shape[1]}"
+            f"Unsupported accumulation period: {accumulation} hours"
         )
 
     if field in accumulated_fields:
-        # return mean, sd, 0, 0.  zero fields are so that each field returns a 4 x ny x nx array.
-        # accumulated fields have been pre-processed s.t. data[:, j, :, :] has accumulation between times j and j+1
-        
-        data1 = np.mean(all_data_mean[fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice], axis=0)            # Mean of the accumulations
-        data2 = np.sqrt(np.mean(all_data_sd[fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice]**2, axis=0))  # RMS of the standard deviations
+        # Forecast accumulated fields contain one value per 6-hour interval.
+        temp_data_mean = all_data_mean[
+            fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice
+        ]
+        temp_data_var = all_data_sd[
+            fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice
+        ] ** 2
+
+        if accumulation == 24:
+            # Mean across the four 6-hour periods.
+            data1 = np.mean(temp_data_mean, axis=0)
+
+            # RMS standard deviation across the four periods.
+            data2 = np.sqrt(np.mean(temp_data_var, axis=0))
+
+        elif accumulation == 6:
+            # Only one 6-hour period, so no temporal averaging is needed.
+            data1 = temp_data_mean[0, :, :]
+            data2 = np.sqrt(temp_data_var[0, :, :])
+
         data = np.stack([data1, data2], axis=-1)
+
+        if not np.isfinite(data).all():
+            nc_file.close()
+            raise FileNotFoundError(
+                f"Invalid forecast data for {date}, field {field}"
+            )
+
     else:
-        # return mean and std computed using the trapezium rule
-        temp_data_mean = all_data_mean[fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice]
-        temp_data_var = all_data_sd[fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice]**2  # Convert to variances
-        data1 = (temp_data_mean[0, :, :]/2 + np.sum(temp_data_mean[1:4,:,:], axis=0) + temp_data_mean[4,:,:]/2)/4
-        data2 = (temp_data_var[0, :, :]/2 + np.sum(temp_data_var[1:4,:,:], axis=0) + temp_data_var[4,:,:]/2)/4
+        # Instantaneous forecast fields.
+        temp_data_mean = all_data_mean[
+            fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice
+        ]
+        temp_data_var = all_data_sd[
+            fcst_idx, lead_idx1:lead_idx2, lat_slice, lon_slice
+        ] ** 2
+
+        if accumulation == 24:
+            # Trapezoidal average over:
+            # t, t+6, t+12, t+18, t+24
+            data1 = (
+                temp_data_mean[0, :, :] / 2
+                + np.sum(temp_data_mean[1:4, :, :], axis=0)
+                + temp_data_mean[4, :, :] / 2
+            ) / 4
+
+            data2 = (
+                temp_data_var[0, :, :] / 2
+                + np.sum(temp_data_var[1:4, :, :], axis=0)
+                + temp_data_var[4, :, :] / 2
+            ) / 4
+
+        elif accumulation == 6:
+            # Trapezoidal average over the two endpoints:
+            # t and t+6
+            data1 = (
+                temp_data_mean[0, :, :]
+                + temp_data_mean[1, :, :]
+            ) / 2
+
+            data2 = (
+                temp_data_var[0, :, :]
+                + temp_data_var[1, :, :]
+            ) / 2
+
         data = np.stack([data1, np.sqrt(data2)], axis=-1)
+
+        if not np.isfinite(data).all():
+            nc_file.close()
+            raise FileNotFoundError(
+                f"Invalid forecast data for {date}, field {field}"
+            )
 
     nc_file.close()
 
@@ -383,7 +573,7 @@ def load_fcst(field,
         # forecast data from one of the training years
         if norm_dict is None:
             raise RuntimeError("Forecast normalisation dictionary has not been loaded")
-        if field in ["mcc"]:
+        if field in ["mcc", "tcc"]:
             # already 0-1
             return data
         elif field in ["sp", "t2m"]:
@@ -402,22 +592,23 @@ def load_fcst(field,
 
 def load_fcst_stack(fields,
                     date,
-                    time_idx,
+                    leadtime=LEADTIME,
+                    accumulation=ACCUMULATION,
                     log_precip=False,
                     norm=False,
                     fcst_norm_dict=None):
     '''
     Returns forecast fields, for the given date and time interval.
     Each field returned by load_fcst has two channels (see load_fcst for details),
-    then these are concatentated to form an array of H x W x 4*len(fields)
+    then these are concatentated to form an array of H x W x 2*len(fields)
     '''
     field_arrays = []
     for f in fields:
-        field_arrays.append(load_fcst(f, date, time_idx, log_precip=log_precip, norm=norm, fcst_norm_dict=fcst_norm_dict))
+        field_arrays.append(load_fcst(f, date, leadtime=leadtime, accumulation=accumulation, log_precip=log_precip, norm=norm, fcst_norm_dict=fcst_norm_dict))
     return np.concatenate(field_arrays, axis=-1)
 
 
-def get_fcst_stats_slow(field, year=2018):
+def get_fcst_stats_slow(field, leadtime=LEADTIME, year=2018):
     '''
     Calculates and returns min, max, mean, std per field,
     which can be used to generate normalisation parameters.
@@ -425,7 +616,7 @@ def get_fcst_stats_slow(field, year=2018):
     These are done via the data loading routines, which is
     slightly inefficient.
     '''
-    dates = get_dates(year, start_hour=6, end_hour=6)
+    dates = get_dates(year, leadtime=leadtime)
 
     mi = 0.0
     mx = 0.0
@@ -434,7 +625,7 @@ def get_fcst_stats_slow(field, year=2018):
     nsamples = 0
     for datestr in dates:
         for time_idx in range(28):
-            data = load_fcst(field, datestr, time_idx)[:, :, 0]
+            data = load_fcst(field, datestr, leadtime=leadtime)[:, :, 0]
             mi = min(mi, data.min())
             mx = max(mx, data.max())
             dsum += np.mean(data)
@@ -486,10 +677,13 @@ def get_fcst_stats_fast(field, year=2018):
         # for all other accumulated fields [just ssr for us]
         data /= (HOURS*3600)  # convert from a 6-hr difference to a per-second rate
 
-    mi = data.min()
-    mx = data.max()
-    mn = np.mean(data, dtype=np.float64)
-    sd = np.std(data, dtype=np.float64)
+    if np.ma.isMaskedArray(data):
+        data = data.filled(np.nan)
+
+    mi = np.nanmin(data)
+    mx = np.nanmax(data)
+    mn = np.nanmean(data, dtype=np.float64)
+    sd = np.nanstd(data, dtype=np.float64)
     return mi, mx, mn, sd
 
 #MW: do it once -- for one year -- and save. Can be used very simply.
@@ -520,7 +714,16 @@ def gen_fcst_norm(year=2018):
         pickle.dump(stats_dic, f)
 
 
-def load_fcst_norm(year=2018, normalisation_path=NORMALISATION_PATH):
+def load_fcst_norm(year=2018, normalisation_path=None):
+    if normalisation_path is None:
+        normalisation_path = NORMALISATION_PATH
+
+    if normalisation_path is None:
+        raise ValueError(
+            "No normalisation path supplied. "
+            "Pass normalisation_path explicitly or configure NORMALISATION_PATH."
+        )       
+    
     print("In load_fcst_norm")
     fcstnorm_path = os.path.join(normalisation_path, f"FCSTNorm{year}.pkl")
     print(f"fcstnorm_path = {fcstnorm_path}")
@@ -529,9 +732,13 @@ def load_fcst_norm(year=2018, normalisation_path=NORMALISATION_PATH):
 
 
 try:
-    print("Loading forecast normalisations")
-    fcst_norm = load_fcst_norm(2018)
-except:  # noqa
+    if NORMALISATION_PATH is not None:
+        print("Loading forecast normalisations")
+        fcst_norm = load_fcst_norm(2018)
+    else:
+        fcst_norm = None
+        
+except Exception:
     fcst_norm = None
     print("******************************************")
     print("*** FORECAST NORMALISATIONS NOT LOADED ***")

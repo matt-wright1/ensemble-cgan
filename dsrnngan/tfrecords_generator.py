@@ -12,7 +12,6 @@ import xarray as xr
 import read_config
 from data import all_fcst_fields, denormalise, get_dates, HOURS, crop_to_bounds, bounds
 
-
 data_paths = read_config.get_data_paths()
 records_folder = data_paths["TFRecords"]["tfrecords_path"]
 truth_folder = Path(data_paths["GENERAL"]["TRUTH_PATH"])
@@ -33,17 +32,17 @@ if truth_file is None:
 
 with xr.open_dataset(truth_file) as ds:
     # Handle either lat/lon or latitude/longitude
-    # if crop_to_bounds and "latitude" in ds.coords:
-    #     lat0, lon0, lat1, lon1 = bounds
-    #     lat_slice = slice(lat0, lat1) if ds.latitude[0] < ds.latitude[-1] else slice(lat1, lat0)
-    #     lon_slice = slice(lon0, lon1) if ds.longitude[0] < ds.longitude[-1] else slice(lon1, lon0)
-    #     ds = ds.sel(latitude=lat_slice, longitude=lon_slice)
+    if crop_to_bounds and "latitude" in ds.coords:
+        lat0, lon0, lat1, lon1 = bounds
+        lat_slice = slice(lat0, lat1) if ds.latitude[0] < ds.latitude[-1] else slice(lat1, lat0)
+        lon_slice = slice(lon0, lon1) if ds.longitude[0] < ds.longitude[-1] else slice(lon1, lon0)
+        ds = ds.sel(latitude=lat_slice, longitude=lon_slice)
 
-    # elif crop_to_bounds and "lat" in ds.coords:
-    #     lat0, lon0, lat1, lon1 = bounds
-    #     lat_slice = slice(lat0, lat1) if ds.lat[0] < ds.lat[-1] else slice(lat1, lat0)
-    #     lon_slice = slice(lon0, lon1) if ds.lon[0] < ds.lon[-1] else slice(lon1, lon0)
-        # ds = ds.sel(lat=lat_slice, lon=lon_slice)
+    elif crop_to_bounds and "lat" in ds.coords:
+        lat0, lon0, lat1, lon1 = bounds
+        lat_slice = slice(lat0, lat1) if ds.lat[0] < ds.lat[-1] else slice(lat1, lat0)
+        lon_slice = slice(lon0, lon1) if ds.lon[0] < ds.lon[-1] else slice(lon1, lon0)
+        ds = ds.sel(lat=lat_slice, lon=lon_slice)
 
     lat_name = "y"
     lon_name = "x"
@@ -222,31 +221,126 @@ def create_fixed_dataset(year=None,
 def _float_feature(list_of_floats):  # float32
     return tf.train.Feature(float_list=tf.train.FloatList(value=list_of_floats))
 
-
 def write_data(year,
                folder=records_folder,
                fcst_fields=all_fcst_fields,
+               leadtime=30,
+               accumulation=24,
+               img_chunk_width=DEFAULT_FCST_SHAPE[0],
                num_class=CLASSES,
                log_precip=True,
                fcst_norm=True,
                constants_list=None):
 
+    """
+    Write full-domain radar training samples to TFRecords.
+
+    Multiple lead times are handled by DataGenerator. For example,
+
+        leadtime=[30, 54, 78, 102]
+
+    causes DataGenerator to construct every (date, leadtime) sample.
+    All lead times are written into the SAME set of rainfall-class
+    TFRecord files:
+
+        {year}_1.0.tfrecords
+        {year}_1.1.tfrecords
+        {year}_1.2.tfrecords
+        {year}_1.3.tfrecords
+
+    Radar pixels marked invalid by the radar mask are replaced by 0
+    before serialisation. Non-finite truth pixels outside the mask
+    cause the sample to be skipped.
+
+    Parameters
+    ----------
+    year : int
+        Forecast initialisation year.
+
+    folder : str
+        Output directory.
+
+    fcst_fields : list
+        Forecast fields passed to DataGenerator.
+
+    leadtime : int or sequence of int
+        Start hour(s) of the target accumulation interval.
+
+    accumulation : int
+        Target accumulation period, e.g. 6 or 24 hours.
+
+    img_chunk_width :
+        Retained for interface compatibility. This version writes the
+        FULL domain and does not perform spatial subsampling.
+
+    num_class : int
+        Number of rainfall classes. Currently must be 4.
+
+    log_precip : bool
+        Passed to DataGenerator.
+
+    fcst_norm : bool
+        Passed to DataGenerator.
+
+    constants_list : list or None
+        Constants to request from DataGenerator. The exact argument
+        passed to DataGenerator may need adapting depending on the
+        constants interface used by your generator.
+    """
+
     from data_generator import DataGenerator as DataGeneratorFull
+
+    # ------------------------------------------------------------
+    # Basic setup
+    # ------------------------------------------------------------
+
+    year = int(year)
 
     if constants_list is None:
         constants_list = []
 
-    year = int(year)
+    # Accept either:
+    #
+    #     leadtime=30
+    #
+    # or:
+    #
+    #     leadtime=[30, 54, 78, 102]
+    #
+    if np.isscalar(leadtime):
+        leadtime = [int(leadtime)]
+    else:
+        leadtime = [int(x) for x in leadtime]
 
-    # Binning based on mean rainfall over the full domain
+    if len(leadtime) == 0:
+        raise ValueError("At least one lead time must be supplied")
+
+    # Rainfall-class boundaries, mm/hr
     bins = [0.2, 0.3, 0.45]
+
     assert num_class == 4
+
+    print("=" * 70)
+    print(f"Generating radar TFRecords for year {year}")
+    print(f"Lead times:   {leadtime}")
+    print(f"Accumulation: {accumulation} h")
+    print(f"Constants:    {constants_list}")
+    print("=" * 70)
+
+    # ------------------------------------------------------------
+    # Helper for NaN / Inf diagnostics
+    # ------------------------------------------------------------
 
     def report_nonfinite(name, arr):
         """
-        Report NaN/+Inf/-Inf values in an array.
-        Returns True if any non-finite values are present.
+        Report NaN/+Inf/-Inf values.
+
+        Returns
+        -------
+        bool
+            True if any non-finite values are present.
         """
+
         arr = np.asarray(arr)
 
         n_nan = np.isnan(arr).sum()
@@ -254,65 +348,119 @@ def write_data(year,
         n_neginf = np.isneginf(arr).sum()
 
         if n_nan or n_posinf or n_neginf:
+
             print(
-                f"    {name}: shape={arr.shape}, "
+                f"    {name}: "
+                f"shape={arr.shape}, "
                 f"NaN={n_nan}, "
                 f"+Inf={n_posinf}, "
                 f"-Inf={n_neginf}, "
                 f"total={arr.size}"
             )
+
             return True
 
         return False
 
     # ------------------------------------------------------------
-    # Lead times
+    # Get dates
+    # ------------------------------------------------------------
+    #
+    # IMPORTANT:
+    #
+    # get_dates() should return forecast initialisation dates for
+    # which the requested target data exist.
+    #
+    # This assumes get_dates() accepts multiple lead times.
+    #
+    # DataGenerator then expands:
+    #
+    #     dates x leadtime
+    #
+    # into individual training samples.
     # ------------------------------------------------------------
 
-    # Currently just time_idx=1.
-    # Change this range when you want additional lead times.
-    for time_idx in range(1, 2):
+    dates = get_dates(
+        year,
+        leadtime=leadtime,
+        accumulation=accumulation
+    )
 
-        print(f"\nDoing time index {time_idx}")
+    print(f"\nNumber of initialisation dates: {len(dates)}")
 
-        s_hour = time_idx * HOURS
-        e_hour = s_hour
+    if len(dates) == 0:
+        print("No dates found. Nothing to write.")
+        return
 
-        print(f"start_hour={s_hour}, end_hour={e_hour}")
+    # ------------------------------------------------------------
+    # Create ONE generator containing ALL lead times
+    # ------------------------------------------------------------
+    #
+    # With, for example:
+    #
+    #     dates = [date1, date2]
+    #     leadtime = [30, 54, 78]
+    #
+    # DataGenerator produces:
+    #
+    #     date1, 30
+    #     date1, 54
+    #     date1, 78
+    #     date2, 30
+    #     date2, 54
+    #     date2, 78
+    #
+    # ------------------------------------------------------------
 
-        dates = get_dates(
-            year,
-            start_hour=s_hour,
-            end_hour=e_hour
+    dgc = DataGeneratorFull(
+        dates,
+        fcst_fields=fcst_fields,
+        leadtime=leadtime,
+        accumulation=accumulation,
+        batch_size=1,
+        log_precip=log_precip,
+        shuffle=False,
+        fcst_norm=fcst_norm,
+        constants_list=constants_list
+    )
+
+    print(f"Generator samples: {len(dgc)}")
+
+    expected_samples = len(dates) * len(leadtime)
+
+    print(
+        f"Expected date x leadtime combinations: "
+        f"{len(dates)} x {len(leadtime)} "
+        f"= {expected_samples}"
+    )
+
+    if len(dgc) != expected_samples:
+
+        print(
+            "WARNING: generator length does not equal "
+            "dates x leadtime."
         )
 
-        print(f"Number of dates: {len(dates)}")
+    # ------------------------------------------------------------
+    # ONE set of TFRecords for ALL lead times
+    # ------------------------------------------------------------
 
-        dgc = DataGeneratorFull(
-            dates,
-            fcst_fields=fcst_fields,
-            start_hour=s_hour,
-            end_hour=e_hour,
-            batch_size=1,
-            log_precip=log_precip,
-            shuffle=False,
-            fcst_norm=fcst_norm,
-            constants_list=constants_list
-        )
+    time_idx = 1
 
-        print(f"Generator length: {len(dgc)}")
+    fle_hdles = []
 
-        # --------------------------------------------------------
-        # Create one TFRecord file for each rainfall class
-        # --------------------------------------------------------
+    try:
 
-        fle_hdles = []
-
-        for fh in range(num_class):
+        for clss in range(num_class):
 
             flename = os.path.join(
                 folder,
-                f"{year}_{time_idx}.{fh}.tfrecords"
+                f"{year}_{time_idx}.{clss}.tfrecords"
+            )
+
+            print(
+                f"Opening class {clss}: "
+                f"{flename}"
             )
 
             options = tf.io.TFRecordOptions(
@@ -330,29 +478,52 @@ def write_data(year,
         # Counters
         # --------------------------------------------------------
 
-        class_counts = np.zeros(num_class, dtype=int)
+        class_counts = np.zeros(
+            num_class,
+            dtype=int
+        )
 
-        skipped_mask = 0
         skipped_empty = 0
         skipped_nonfinite = 0
         skipped_missing_file = 0
+        masked_pixels_total = 0
 
-        # --------------------------------------------------------
-        # Generator
-        # --------------------------------------------------------
+        # ========================================================
+        # Generator loop
+        # ========================================================
 
         for batch in range(len(dgc)):
 
             if batch % 10 == 0:
-                print(f"\ntime_idx={time_idx}, batch={batch}")
+
+                print(
+                    f"\nBatch {batch}/{len(dgc)}"
+                )
+
+                # Since batch_size=1, this identifies exactly
+                # which date/leadtime sample is being processed.
+                if hasattr(dgc, "dates"):
+                    print(
+                        f"  date:     {dgc.dates[batch]}"
+                    )
+
+                if hasattr(dgc, "leadtime"):
+                    print(
+                        f"  leadtime: {dgc.leadtime[batch]} h"
+                    )
+
+            # ----------------------------------------------------
+            # Load sample
+            # ----------------------------------------------------
 
             try:
+
                 sample = dgc.__getitem__(batch)
 
             except FileNotFoundError as e:
 
                 print(
-                    f"Skipping batch {batch} because "
+                    f"Skipping batch {batch}: "
                     f"source file is missing: {e}"
                 )
 
@@ -360,52 +531,132 @@ def write_data(year,
                 continue
 
             # ----------------------------------------------------
-            # FULL DOMAIN -- NO SUBSAMPLING
+            # FULL DOMAIN -- NO SPATIAL SUBSAMPLING
             # ----------------------------------------------------
 
             forecast = np.asarray(
-                sample[0]['lo_res_inputs'][0, ...]
+                sample[0]["lo_res_inputs"][0, ...]
             )
 
-            const = np.asarray(
-                sample[0]['hi_res_inputs'][0, ...]
-            )
+            # Constants may either be present or absent depending
+            # on the requested constants.
+            if "hi_res_inputs" in sample[0]:
+
+                const = np.asarray(
+                    sample[0]["hi_res_inputs"][0, ...]
+                )
+
+            else:
+
+                # Preserve a valid empty constants feature if no
+                # constants have been requested.
+                const = np.asarray(
+                    [],
+                    dtype=np.float32
+                )
 
             mask = np.asarray(
-                sample[1]['mask']
+                sample[1]["mask"]
             )
-
-            mask = np.squeeze(mask)
 
             truth = np.asarray(
-                sample[1]['output']
+                sample[1]["output"]
             )
 
-            truth = np.squeeze(truth)
+            # ----------------------------------------------------
+            # Remove batch/singleton dimensions carefully
+            # ----------------------------------------------------
 
-            nan_pixels = np.isnan(truth)
+            # DataGenerator batch_size=1.
+            #
+            # Remove ONLY the batch dimension first rather than
+            # blindly squeezing all dimensions.
+            if mask.ndim > 0 and mask.shape[0] == 1:
+                mask = mask[0]
 
-            print("truth NaNs:", np.count_nonzero(nan_pixels))
-            print("mask True:", np.count_nonzero(mask))
-            print("NaNs covered by mask:", np.count_nonzero(nan_pixels & mask))
-            print("NaNs NOT covered by mask:", np.count_nonzero(nan_pixels & ~mask))
+            if truth.ndim > 0 and truth.shape[0] == 1:
+                truth = truth[0]
+
+            # Some radar loaders return:
+            #
+            #     truth: (1, H, W)
+            #
+            # after the batch dimension has been removed.
+            #
+            # Convert this to:
+            #
+            #     (H, W)
+            #
+            if (
+                truth.ndim == 3
+                and truth.shape[0] == 1
+            ):
+                truth = truth[0]
+
+            if (
+                mask.ndim == 3
+                and mask.shape[0] == 1
+            ):
+                mask = mask[0]
 
             # ----------------------------------------------------
-            # Print shapes for first batch
+            # Shape information for first sample
             # ----------------------------------------------------
 
             if batch == 0:
 
                 print("\nFull-domain shapes:")
-                print("  forecast: ", forecast.shape)
-                print("  constants:", const.shape)
-                print("  truth:    ", truth.shape)
-                print("  mask:     ", mask.shape)
 
-                print("\nExpected flattened sizes:")
-                print("  forecast: ", forecast.size)
-                print("  constants:", const.size)
-                print("  truth:    ", truth.size)
+                print(
+                    "  forecast: ",
+                    forecast.shape
+                )
+
+                print(
+                    "  constants:",
+                    const.shape
+                )
+
+                print(
+                    "  truth:    ",
+                    truth.shape
+                )
+
+                print(
+                    "  mask:     ",
+                    mask.shape
+                )
+
+                print("\nFlattened sizes:")
+
+                print(
+                    "  forecast: ",
+                    forecast.size
+                )
+
+                print(
+                    "  constants:",
+                    const.size
+                )
+
+                print(
+                    "  truth:    ",
+                    truth.size
+                )
+
+                if forecast.ndim >= 3:
+
+                    print(
+                        "  forecast channels:",
+                        forecast.shape[-1]
+                    )
+
+                if const.ndim >= 3:
+
+                    print(
+                        "  constant channels:",
+                        const.shape[-1]
+                    )
 
             # ----------------------------------------------------
             # Empty-array check
@@ -413,25 +664,40 @@ def write_data(year,
 
             if (
                 forecast.size == 0
-                or const.size == 0
                 or truth.size == 0
             ):
 
                 print(
-                    f"Skipping batch {batch}: empty array"
+                    f"Skipping batch {batch}: "
+                    "empty forecast/truth array"
                 )
 
                 print(
                     f"    forecast={forecast.shape}, "
-                    f"const={const.shape}, "
                     f"truth={truth.shape}"
                 )
 
                 skipped_empty += 1
                 continue
 
+            # Constants are allowed to be empty when none were
+            # requested.
+            if (
+                len(constants_list) > 0
+                and const.size == 0
+            ):
+
+                print(
+                    f"Skipping batch {batch}: "
+                    "constants were requested but "
+                    "constant array is empty"
+                )
+
+                skipped_empty += 1
+                continue
+
             # ----------------------------------------------------
-            # Diagnose NaN / Inf
+            # Check forecast/constants for NaN / Inf
             # ----------------------------------------------------
 
             bad_forecast = report_nonfinite(
@@ -439,28 +705,32 @@ def write_data(year,
                 forecast
             )
 
-            bad_const = report_nonfinite(
-                "constants",
-                const
-            )
+            bad_const = False
 
-            bad_truth = report_nonfinite(
-                "truth",
-                truth
-            )
+            if const.size > 0:
+
+                bad_const = report_nonfinite(
+                    "constants",
+                    const
+                )
 
             # ----------------------------------------------------
-            # If forecast is bad, identify the bad channel(s)
+            # Forecast channel diagnostics
             # ----------------------------------------------------
 
-            if bad_forecast:
+            if (
+                bad_forecast
+                and forecast.ndim >= 3
+            ):
 
                 print(
                     f"  Batch {batch}: "
                     "non-finite forecast channels:"
                 )
 
-                for ch in range(forecast.shape[-1]):
+                for ch in range(
+                    forecast.shape[-1]
+                ):
 
                     x = forecast[..., ch]
 
@@ -470,8 +740,15 @@ def write_data(year,
 
                     if n_bad:
 
+                        field_name = (
+                            fcst_fields[ch]
+                            if ch < len(fcst_fields)
+                            else f"channel_{ch}"
+                        )
+
                         print(
-                            f"    channel {ch}: "
+                            f"    channel {ch} "
+                            f"({field_name}): "
                             f"bad={n_bad}/{x.size}, "
                             f"NaN={np.isnan(x).sum()}, "
                             f"+Inf={np.isposinf(x).sum()}, "
@@ -479,17 +756,22 @@ def write_data(year,
                         )
 
             # ----------------------------------------------------
-            # More diagnostics for constants
+            # Constant channel diagnostics
             # ----------------------------------------------------
 
-            if bad_const and const.ndim >= 3:
+            if (
+                bad_const
+                and const.ndim >= 3
+            ):
 
                 print(
                     f"  Batch {batch}: "
                     "non-finite constant channels:"
                 )
 
-                for ch in range(const.shape[-1]):
+                for ch in range(
+                    const.shape[-1]
+                ):
 
                     x = const[..., ch]
 
@@ -499,87 +781,223 @@ def write_data(year,
 
                     if n_bad:
 
+                        const_name = (
+                            constants_list[ch]
+                            if ch < len(constants_list)
+                            else f"channel_{ch}"
+                        )
+
                         print(
-                            f"    channel {ch}: "
+                            f"    channel {ch} "
+                            f"({const_name}): "
                             f"bad={n_bad}/{x.size}, "
                             f"NaN={np.isnan(x).sum()}, "
                             f"+Inf={np.isposinf(x).sum()}, "
                             f"-Inf={np.isneginf(x).sum()}"
                         )
 
+            # Forecast/constants have no radar-style validity
+            # mask. Therefore non-finite values invalidate the
+            # sample.
+            if bad_forecast or bad_const:
+
+                print(
+                    f"Skipping batch {batch}: "
+                    "forecast/constants contain NaN/Inf"
+                )
+
+                skipped_nonfinite += 1
+                continue
+
+            # ====================================================
+            # RADAR-SPECIFIC HANDLING
+            # ====================================================
+
             # ----------------------------------------------------
-            # Mask check
+            # Align mask and truth shapes
             # ----------------------------------------------------
 
             if mask.shape != truth.shape:
 
+                # Common case:
+                #
+                #     truth = (H, W, 1)
+                #     mask  = (H, W)
+                #
                 if (
-                    mask.ndim == truth.ndim - 1
+                    truth.ndim == mask.ndim + 1
                     and truth.shape[-1] == 1
-                    and mask.shape == truth.shape[:-1]
+                    and truth.shape[:-1] == mask.shape
                 ):
+
                     mask = mask[..., np.newaxis]
 
+                # Opposite singleton-channel case.
+                elif (
+                    mask.ndim == truth.ndim + 1
+                    and mask.shape[-1] == 1
+                    and mask.shape[:-1] == truth.shape
+                ):
+
+                    mask = mask[..., 0]
+
                 else:
+
                     raise ValueError(
-                        f"Mask/truth shape mismatch: "
-                        f"mask={mask.shape}, truth={truth.shape}"
+                        "Mask/truth shape mismatch: "
+                        f"mask={mask.shape}, "
+                        f"truth={truth.shape}"
                     )
-
-            n_masked = np.count_nonzero(mask)
-
-            if n_masked:
-                print(
-                    f"Batch {batch}: "
-                    f"{n_masked}/{mask.size} pixels masked "
-                    f"({100.0 * n_masked / mask.size:.3f}%)"
-                )
-
-            # ----------------------------------------------------
-            # Replace invalid masked radar pixels
-            # ----------------------------------------------------
 
             mask = mask.astype(bool)
 
-            # Find non-finite truth pixels that are NOT masked.
-            # These indicate a problem beyond normal missing radar data.
-            bad_valid_pixels = (~np.isfinite(truth)) & (~mask)
+            # ----------------------------------------------------
+            # Radar diagnostics
+            # ----------------------------------------------------
 
-            if np.any(bad_valid_pixels):
+            nan_pixels = np.isnan(truth)
+
+            n_nan = np.count_nonzero(
+                nan_pixels
+            )
+
+            n_masked = np.count_nonzero(
+                mask
+            )
+
+            n_nan_masked = np.count_nonzero(
+                nan_pixels & mask
+            )
+
+            n_nan_unmasked = np.count_nonzero(
+                nan_pixels & ~mask
+            )
+
+            if (
+                n_nan > 0
+                or n_masked > 0
+            ):
+
+                print(
+                    f"Batch {batch} radar:"
+                )
+
+                print(
+                    f"    truth NaNs:          "
+                    f"{n_nan}"
+                )
+
+                print(
+                    f"    mask True:           "
+                    f"{n_masked}"
+                )
+
+                print(
+                    f"    NaNs covered by mask:"
+                    f" {n_nan_masked}"
+                )
+
+                print(
+                    f"    NaNs outside mask:   "
+                    f"{n_nan_unmasked}"
+                )
+
+            if n_masked:
+
+                masked_pixels_total += n_masked
+
+                print(
+                    f"    masked fraction: "
+                    f"{100.0 * n_masked / mask.size:.3f}%"
+                )
+
+            # ----------------------------------------------------
+            # Find invalid radar values OUTSIDE radar mask
+            # ----------------------------------------------------
+            #
+            # NaNs/Inf are acceptable where the radar mask says
+            # that observations are invalid.
+            #
+            # They are NOT acceptable in nominally valid radar
+            # pixels.
+            # ----------------------------------------------------
+
+            bad_valid_pixels = (
+                ~np.isfinite(truth)
+            ) & (
+                ~mask
+            )
+
+            n_bad_valid = np.count_nonzero(
+                bad_valid_pixels
+            )
+
+            if n_bad_valid:
+
                 print(
                     f"Skipping batch {batch}: "
-                    f"{np.count_nonzero(bad_valid_pixels)} non-finite "
-                    "truth pixels are outside the radar mask"
+                    f"{n_bad_valid} non-finite truth "
+                    "pixels are outside the radar mask"
                 )
+
                 skipped_nonfinite += 1
                 continue
 
-            # Masked radar pixels may contain NaN.
-            # Do not allow these NaNs into the TFRecord / GAN.
+            # ----------------------------------------------------
+            # Replace masked radar values
+            # ----------------------------------------------------
+            #
+            # Masked pixels may contain NaNs. Never serialise
+            # those NaNs into the TFRecord.
+            # ----------------------------------------------------
+
             truth = truth.copy()
+
             truth[mask] = 0.0
 
-            # Final safety check
-            if not np.all(np.isfinite(truth)):
+            # Final radar safety check.
+            if not np.all(
+                np.isfinite(truth)
+            ):
+
                 print(
                     f"Skipping batch {batch}: "
-                    "truth still contains NaN/Inf after masking"
+                    "truth still contains NaN/Inf "
+                    "after applying radar mask"
                 )
+
                 skipped_nonfinite += 1
                 continue
+
+            # ====================================================
+            # Flatten only AFTER validation/masking
+            # ====================================================
+
+            forecast_flat = (
+                forecast
+                .astype(np.float32, copy=False)
+                .flatten()
+            )
+
+            const_flat = (
+                const
+                .astype(np.float32, copy=False)
+                .flatten()
+            )
+
+            truth_flat = (
+                truth
+                .astype(np.float32, copy=False)
+                .flatten()
+            )
+
             # ----------------------------------------------------
-            # Flatten AFTER all checks
+            # Denormalise radar truth for rainfall classification
             # ----------------------------------------------------
 
-            forecast_flat = forecast.flatten()
-            const_flat = const.flatten()
-            truth_flat = truth.flatten()
-
-            # ----------------------------------------------------
-            # Denormalise truth for rainfall classification
-            # ----------------------------------------------------
-
-            truth_raw = denormalise(truth_flat)
+            truth_raw = np.asarray(
+                denormalise(truth_flat)
+            )
 
             if truth_raw.size == 0:
 
@@ -591,9 +1009,28 @@ def write_data(year,
                 skipped_empty += 1
                 continue
 
-            truth_mean = np.nanmean(truth_raw)
+            if not np.all(
+                np.isfinite(truth_raw)
+            ):
 
-            if not np.isfinite(truth_mean):
+                print(
+                    f"Skipping batch {batch}: "
+                    "denormalised truth contains "
+                    "NaN/Inf"
+                )
+
+                skipped_nonfinite += 1
+                continue
+
+            # ----------------------------------------------------
+            # Mean rainfall
+            # ----------------------------------------------------
+
+            truth_mean = truth_raw.mean()
+
+            if not np.isfinite(
+                truth_mean
+            ):
 
                 print(
                     f"Skipping batch {batch}: "
@@ -624,19 +1061,25 @@ def write_data(year,
                 clss = 3
 
             # ----------------------------------------------------
-            # TFRecord
+            # Construct TFRecord example
             # ----------------------------------------------------
 
             feature = {
 
-                'generator_input':
-                    _float_feature(forecast_flat),
+                "generator_input":
+                    _float_feature(
+                        forecast_flat
+                    ),
 
-                'constants':
-                    _float_feature(const_flat),
+                "constants":
+                    _float_feature(
+                        const_flat
+                    ),
 
-                'generator_output':
-                    _float_feature(truth_flat)
+                "generator_output":
+                    _float_feature(
+                        truth_flat
+                    )
             }
 
             features = tf.train.Features(
@@ -647,57 +1090,111 @@ def write_data(year,
                 features=features
             )
 
+            # ----------------------------------------------------
+            # Write into rainfall class
+            # ----------------------------------------------------
+
             fle_hdles[clss].write(
                 example.SerializeToString()
             )
 
             class_counts[clss] += 1
 
-        # --------------------------------------------------------
-        # Close TFRecord files
-        # --------------------------------------------------------
+    # ============================================================
+    # Always close TFRecord files
+    # ============================================================
+
+    finally:
 
         for fh in fle_hdles:
             fh.close()
 
-        # --------------------------------------------------------
-        # Summary
-        # --------------------------------------------------------
+    # ============================================================
+    # Summary
+    # ============================================================
 
-        print("\n" + "=" * 60)
+    total_written = int(
+        class_counts.sum()
+    )
+
+    total_skipped = (
+        skipped_empty
+        + skipped_nonfinite
+        + skipped_missing_file
+    )
+
+    print("\n" + "=" * 70)
+
+    print(
+        f"Finished radar TFRecords for year={year}"
+    )
+
+    print(
+        f"Lead times included: {leadtime}"
+    )
+
+    print(
+        f"Accumulation: {accumulation} h"
+    )
+
+    print(
+        f"Generator samples: {len(dgc)}"
+    )
+
+    print("\nWritten per rainfall class:")
+
+    for clss, count in enumerate(
+        class_counts
+    ):
 
         print(
-            f"Finished year={year}, "
-            f"time_idx={time_idx}"
+            f"  class {clss}: {count}"
         )
 
-        print("\nWritten per class:")
+    print(
+        f"\nTotal written: {total_written}"
+    )
 
-        for clss, count in enumerate(class_counts):
-            print(
-                f"  class {clss}: {count}"
+    print("\nSkipped:")
+
+    print(
+        f"  missing source file: "
+        f"{skipped_missing_file}"
+    )
+
+    print(
+        f"  empty arrays:        "
+        f"{skipped_empty}"
+    )
+
+    print(
+        f"  NaN/Inf:             "
+        f"{skipped_nonfinite}"
+    )
+
+    print(
+        f"  total skipped:       "
+        f"{total_skipped}"
+    )
+
+    print(
+        f"\nTotal masked radar pixels replaced: "
+        f"{masked_pixels_total}"
+    )
+
+    print("\nOutput files:")
+
+    for clss in range(num_class):
+
+        print(
+            "  "
+            + os.path.join(
+                folder,
+                f"{year}_{time_idx}.{clss}.tfrecords"
             )
-
-        print("\nSkipped:")
-
-        print(
-            f"  missing source file: {skipped_missing_file}"
         )
 
-        print(
-            f"  empty arrays:        {skipped_empty}"
-        )
-
-        print(
-            f"  NaN/Inf:             {skipped_nonfinite}"
-        )
-
-        print(
-            f"  mask:                {skipped_mask}"
-        )
-
-        print("=" * 60)
-
+    print("=" * 70)
 
 # currently unused; was previously used to make small-image validation dataset,
 # but this is now obsolete

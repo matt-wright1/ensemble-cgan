@@ -1,14 +1,24 @@
 import argparse
-import yaml
 import gc
 import json
+import math
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # suppress TF debug message spam in v2.12
+
 from pathlib import Path
 
+import yaml
+
+
 # ------------------------------------------------------------
-# Parse command-line arguments first
+# Suppress TensorFlow debug-message spam
 # ------------------------------------------------------------
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+
+# ============================================================
+# Parse command-line arguments BEFORE importing cGAN modules
+# ============================================================
 
 parser = argparse.ArgumentParser()
 
@@ -18,7 +28,9 @@ parser.add_argument(
     help="Path to configuration file"
 )
 
-parser.set_defaults(do_training=True)
+parser.set_defaults(
+    do_training=True
+)
 
 parser.add_argument(
     "--no_train",
@@ -57,9 +69,17 @@ group.add_argument(
     const="blitz"
 )
 
-parser.set_defaults(evalnum=None)
-parser.set_defaults(evaluate=False)
-parser.set_defaults(plot_ranks=False)
+parser.set_defaults(
+    evalnum=None
+)
+
+parser.set_defaults(
+    evaluate=False
+)
+
+parser.set_defaults(
+    plot_ranks=False
+)
 
 parser.add_argument(
     "--evaluate",
@@ -78,68 +98,319 @@ parser.add_argument(
 args = parser.parse_args()
 
 
-# ------------------------------------------------------------
-# Read experiment config before importing cGAN modules, to ensure correct local_config
-# ------------------------------------------------------------
+# ============================================================
+# Read experiment configuration BEFORE importing modules that
+# ultimately import read_config
+# ============================================================
 
-with open(args.config, "r") as f:
-    setup_params = yaml.safe_load(f)
+config_path = os.path.abspath(
+    args.config
+)
+
+if not os.path.isfile(config_path):
+
+    raise FileNotFoundError(
+        f"Experiment config does not exist: "
+        f"{config_path}"
+    )
 
 
-# ------------------------------------------------------------
-# Select local config for this process
-# ------------------------------------------------------------
+with open(
+    config_path,
+    "r"
+) as f:
 
-local_config_path = setup_params["GENERAL"]["local_config_path"]
+    setup_params = yaml.safe_load(
+        f
+    )
 
-# Resolve relative to experiment config file
-if not os.path.isabs(local_config_path):
+
+# ============================================================
+# Read leadtime / accumulation configuration
+# ============================================================
+
+leadtime = setup_params["DATA"]["leadtime"]
+
+#
+if isinstance(
+    leadtime,
+    (int, float)
+):
+
+    leadtime = [
+        int(leadtime)
+    ]
+
+else:
+
+    leadtime = [
+        int(x)
+        for x in leadtime
+    ]
+
+
+if len(leadtime) == 0:
+
+    raise ValueError(
+        "DATA.leadtime must contain at least "
+        "one lead time"
+    )
+
+
+accumulation = int(
+    setup_params[
+        "DATA"
+    ][
+        "accumulation"
+    ]
+)
+
+
+if accumulation not in (
+    6,
+    24,
+):
+
+    raise ValueError(
+        "DATA.accumulation must be either "
+        f"6 or 24 hours; got {accumulation}"
+    )
+
+
+# ============================================================
+# Select local configuration
+# ============================================================
+
+local_config_path = setup_params[
+    "GENERAL"
+][
+    "local_config_path"
+]
+
+
+# Resolve relative local-config paths relative to the
+# experiment configuration file, NOT the current working
+# directory.
+if not os.path.isabs(
+    local_config_path
+):
+
     local_config_path = os.path.join(
-        os.path.dirname(os.path.abspath(args.config)),
+        os.path.dirname(
+            config_path
+        ),
         local_config_path,
     )
 
-os.environ["CGAN_LOCAL_CONFIG"] = local_config_path
 
-print(f"Experiment config: {os.path.abspath(args.config)}")
-print(f"Local config:      {local_config_path}")
+local_config_path = os.path.abspath(
+    local_config_path
+)
+
+
+if not os.path.isfile(
+    local_config_path
+):
+
+    raise FileNotFoundError(
+        f"Local config does not exist: "
+        f"{local_config_path}"
+    )
+
+
+# ============================================================
+# Environment variables consumed by read_config / data modules
+# ============================================================
+
+os.environ[
+    "CGAN_LOCAL_CONFIG"
+] = local_config_path
 
 
 # ------------------------------------------------------------
-# NOW import modules which read local_config
+# Leadtime / accumulation
 # ------------------------------------------------------------
+#
+# LEADTIME remains a scalar for backwards compatibility with
+# code which expects int(os.environ["LEADTIME"]).
+#
+# The full list remains available as the `leadtime` variable
+# in main.py and should be passed explicitly to DataGenerator.
+# ------------------------------------------------------------
+
+os.environ[
+    "LEADTIME"
+] = str(
+    leadtime[0]
+)
+
+os.environ[
+    "ACCUMULATION"
+] = str(
+    accumulation
+)
+
+
+# ------------------------------------------------------------
+# Domain cropping
+# ------------------------------------------------------------
+
+os.environ[
+    "CGAN_CROP_TO_BOUNDS"
+] = str(
+    setup_params[
+        "DATA"
+    ][
+        "crop_to_bounds"
+    ]
+)
+
+
+os.environ[
+    "CGAN_BOUNDS"
+] = ",".join(
+    str(x)
+    for x in setup_params[
+        "DATA"
+    ][
+        "bounds"
+    ]
+)
+
+
+# ------------------------------------------------------------
+# Forecast-field configuration
+# ------------------------------------------------------------
+
+os.environ[
+    "CGAN_ALL_FCST_FIELDS"
+] = json.dumps(
+    setup_params[
+        "DATA"
+    ][
+        "all_fcst_fields"
+    ]
+)
+
+
+os.environ[
+    "CGAN_ACCUMULATED_FIELDS"
+] = json.dumps(
+    setup_params[
+        "DATA"
+    ][
+        "accumulated_fields"
+    ]
+)
+
+
+os.environ[
+    "CGAN_NONNEGATIVE_FIELDS"
+] = json.dumps(
+    setup_params[
+        "DATA"
+    ][
+        "nonnegative_fields"
+    ]
+)
+
+
+# ============================================================
+# Configuration summary
+# ============================================================
+
+print(
+    f"Experiment config: {config_path}"
+)
+
+print(
+    f"Local config:      {local_config_path}"
+)
+
+print(
+    f"Lead times:        {leadtime}"
+)
+
+print(
+    f"Accumulation:      {accumulation} h"
+)
+
+
+# ============================================================
+# NOW import modules which ultimately read read_config
+# ============================================================
+#
+# Everything above this point must happen before these imports.
+# ============================================================
 
 import matplotlib
-matplotlib.use("Agg")
+
+matplotlib.use(
+    "Agg"
+)
 
 import numpy as np
 import pandas as pd
 
-import read_config
 import data
 import evaluation
 import plots
+import read_config
 import setupdata
 import setupmodel
 import train
 
 
-if __name__ == "__main__":
-    read_config.set_gpu_mode()  # set up whether to use GPU, and mem alloc mode
-    df_dict = read_config.read_downscaling_factor()  # read downscaling params
+# ============================================================
+# Main program
+# ============================================================
 
-    #Checks
-    if args.evaluate and args.evalnum is None:
+if __name__ == "__main__":
+
+    # --------------------------------------------------------
+    # GPU / downscaling setup
+    # --------------------------------------------------------
+
+    read_config.set_gpu_mode()
+
+    df_dict = (
+        read_config
+        .read_downscaling_factor()
+    )
+
+    # --------------------------------------------------------
+    # Argument checks
+    # --------------------------------------------------------
+
+    if (
+        args.evaluate
+        and args.evalnum is None
+    ):
+
         raise RuntimeError(
-            "You asked for evaluation to occur, but did not pass in "
-            "'--eval_full', '--eval_short', or '--eval_blitz' "
+            "You asked for evaluation to occur, "
+            "but did not pass '--eval_full', "
+            "'--eval_short', or '--eval_blitz' "
             "to specify length of evaluation"
         )
 
-    if not os.path.isfile(local_config_path):
-        raise FileNotFoundError(
-            f"Local config does not exist: {local_config_path}"
-        )
+    # --------------------------------------------------------
+    # Configuration is already loaded.
+    #
+    # Do NOT reopen/reload the YAML here.
+    # --------------------------------------------------------
+
+    print(
+        "\nConfiguration loaded successfully:"
+    )
+
+    print(
+        f"  leadtime     = {leadtime}"
+    )
+
+    print(
+        f"  accumulation = {accumulation}"
+    )
 
     mode = setup_params["GENERAL"]["mode"]
     arch = setup_params["MODEL"]["architecture"]
@@ -237,6 +508,8 @@ if __name__ == "__main__":
             val_years=val_years,
             autocoarsen=autocoarsen,
             weights=training_weights,
+            leadtime=leadtime,
+            accumulation=accumulation,
             batch_size=batch_size,
             constants_list=constants_list)
 
@@ -352,7 +625,9 @@ if __name__ == "__main__":
                                                  latent_variables=latent_variables,
                                                  noise_channels=noise_channels,
                                                  padding=padding,
-                                                 ensemble_size=10)
+                                                 ensemble_size=10,
+                                                 leadtime=leadtime,
+                                                 accumulation=accumulation)
 
     if args.plot_ranks:
         plots.plot_histograms(log_folder, val_years, ranks=ranks_to_save, N_ranks=11)

@@ -1,6 +1,7 @@
 import gc
 import os
 import warnings
+import json
 
 import numpy as np
 import numpy.ma as ma
@@ -20,6 +21,8 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 path = os.path.dirname(os.path.abspath(__file__))
 ds_fac = read_config.read_downscaling_factor()["downscaling_factor"]
 
+LEADTIME = int(os.environ.get("LEADTIME", 30))
+ACCUMULATION = int(os.environ.get("ACCUMULATION", 24))
 
 def setup_inputs(*,
                  mode,
@@ -27,6 +30,8 @@ def setup_inputs(*,
                  downscaling_steps,
                  val_years,
                  autocoarsen,
+                 leadtime,
+                 accumulation,
                  input_channels,
                  constant_fields,
                  constants_list,
@@ -55,26 +60,10 @@ def setup_inputs(*,
     _, data_gen_valid = setupdata.setup_data(
         val_years=val_years,
         autocoarsen=autocoarsen,
+        leadtime=leadtime,
+        accumulation=accumulation,
         constants_list=constants_list)
     return gen, data_gen_valid
-
-
-def _init_VAEGAN(gen, data_gen, batch_size, latent_variables):
-    if False:
-        # this runs the model on one batch, which is what the internet says
-        # but this doesn't actually seem to be necessary?!
-        data_gen_iter = iter(data_gen)
-        inputs, _ = next(data_gen_iter)
-        cond = inputs['lo_res_inputs']
-        const = inputs['hi_res_inputs']
-
-        noise_shape = np.array(cond)[0, ..., 0].shape + (latent_variables,)
-        noise_gen = NoiseGenerator(noise_shape, batch_size=batch_size)
-        mean, logvar = gen.encoder([cond, const])
-        gen.decoder.predict([mean, logvar, noise_gen(), const])
-    # even after running the model on one batch, this needs to be set(?!)
-    gen.built = True
-    return
 
 
 def eval_one_chkpt(*,
@@ -100,7 +89,6 @@ def eval_one_chkpt(*,
     emmse_all = []
     ralsd_all = []
 
-    data_gen_iter = iter(data_gen)
     tpidx = 2*data.all_fcst_fields.index('tp')  # 4*idx has tp ens mean -- MW: changed to 2
     batch_size = 1  # do one full-size image at a time
 
@@ -115,14 +103,36 @@ def eval_one_chkpt(*,
     CRPS_pooling_methods = ['no_pooling', 'max_4', 'max_16', 'avg_4', 'avg_16']
     rng = np.random.default_rng()
 
-    for kk in range(num_images):
-        # load truth images
-        inputs, outputs = next(data_gen_iter)
+    n_success = 0
+        
+    print("Requested successful images:", num_images)
+    print("len(data_gen):", len(data_gen))
+    print("Number of dates:", len(data_gen.dates))
+    print("First dates:", data_gen.dates[:10])
+
+    for kk in range(len(data_gen)):
+        if n_success >= num_images:
+            break
+
+        try:
+            inputs, outputs = data_gen[kk]
+        except FileNotFoundError as e:
+            print(f"Skipping evaluation sample: {e}")
+            continue
+
+        n_success += 1
+
         cond = inputs['lo_res_inputs']
         const = inputs['hi_res_inputs']
         truth = outputs['output']
         print(np.shape(truth))
         mask = outputs['mask']
+
+        if truth.ndim == 4 and truth.shape[1] == 1:
+            truth = truth[:, 0]
+
+        if mask.ndim == 4 and mask.shape[1] == 1:
+            mask = mask[:, 0]
 
         masked_truth = ma.array(truth, mask=mask)
         masked_truth = np.expand_dims(masked_truth, axis=-1)  # must be 4D tensor for pooling NHWC
@@ -325,7 +335,9 @@ def evaluate_multiple_checkpoints(*,
                                   latent_variables,
                                   noise_channels,
                                   padding,
-                                  ensemble_size):
+                                  ensemble_size,
+                                  leadtime,
+                                  accumulation):
 
     df_dict = read_config.read_downscaling_factor()
 
@@ -334,6 +346,8 @@ def evaluate_multiple_checkpoints(*,
                                        downscaling_steps=df_dict["steps"],
                                        val_years=val_years,
                                        autocoarsen=autocoarsen,
+                                       leadtime=leadtime,
+                                       accumulation=accumulation,
                                        input_channels=input_channels,
                                        constant_fields=constant_fields,
                                        constants_list=constants_list,
@@ -346,6 +360,13 @@ def evaluate_multiple_checkpoints(*,
     log_line(log_fname, f"Number of images: {num_images}")
     log_line(log_fname, f"Samples per image: {ensemble_size}")
     log_line(log_fname, f"Data gen seed {data_gen_valid.seed}, initial dates/time indices: {data_gen_valid.dates[0:4]}, {data_gen_valid.time_idxs[0:4]}")
+    log_line(
+                log_fname,
+                f"Data gen seed {data_gen_valid.seed}, "
+                f"leadtime={leadtime} h, "
+                f"accumulation={accumulation} h, "
+                f"initial dates={data_gen_valid.dates[0:4]}"
+            )
     log_line(log_fname, "N CRPS CRPS_max_4 CRPS_max_16 CRPS_avg_4 CRPS_avg_16 RMSE EMRMSE RALSD MAE OPL OPR")
 
     for model_number in model_numbers:
@@ -356,8 +377,6 @@ def evaluate_multiple_checkpoints(*,
             continue
 
         print(gen_weights_file)
-        if mode == "VAEGAN":
-            _init_VAEGAN(gen, data_gen_valid, 1, latent_variables)
         gen.load_weights(gen_weights_file)
         arrays, crps, other = eval_one_chkpt(mode=mode,
                                              gen=gen,

@@ -138,6 +138,8 @@ sync*.sh
 
 #MW
 nohup_out_files/
+data/**
+interface/view_forecasts/data/**
 fenwick_cgan/
 forecast_date_from_Fenwick.py
 forecast_yamls*
